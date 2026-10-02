@@ -1,0 +1,64 @@
+# ~/.config/swaylock/config
+# swaylock 1.8.4 — password indicator + placeholder background image
+#
+# NOTE: Vanilla swaylock has no option to render a "username" text field.
+# The indicator below shows the password/typing feedback circle only.
+# If you need on-screen username text, look at the "swaylock-effects" fork
+# or a greetd-based greeter instead.
+
+# --- Background image ---------------------------------------------------
+# Replace this path with your real wallpaper. As a placeholder you can use
+# any existing image, e.g. Ubuntu's default desktop background:
+image=/usr/share/backgrounds/warty-final-ubuntu.png
+scaling=fill
+
+# Fallback solid color shown while the image loads / if it fails to load
+color=1e1e2e
+
+# --- Password / indicator field -----------------------------------------
+indicator
+indicator-radius=120
+indicator-thickness=10
+
+# Idle state (before typing starts)
+inside-color=1e1e2eaa
+ring-color=89b4fa
+line-color=00000000
+text-color=cdd6f4
+
+# While typing a key
+key-hl-color=a6e3a1
+bs-hl-color=f38ba8
+
+# Verifying password (after Enter)
+inside-ver-color=1e1e2eaa
+ring-ver-color=f9e2af
+text-ver-color=f9e2af
+
+# Wrong password
+inside-wrong-color=1e1e2eaa
+ring-wrong-color=f38ba8
+text-wrong-color=f38ba8
+
+# Cleared / caps-lock states
+inside-clear-color=1e1e2eaa
+ring-clear-color=fab387
+text-clear-color=fab387
+line-clear-color=00000000
+
+# --- Extra feedback ------------------------------------------------------
+show-failed-attempts
+indicator-caps-lock
+show-keyboard-layout
+
+# Font used for the indicator text (Verifying / Wrong Password / attempts)
+font=Sans
+font-size=24
+
+# Grace period: don't require a password if unlocked within N seconds
+# of locking (uncomment if wanted)
+# grace=2
+
+# Misc
+ignore-empty-password
+daemonize

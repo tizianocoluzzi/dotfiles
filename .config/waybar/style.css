@@ -1,0 +1,327 @@
+
+@import url("colors.css");
+
+* {
+  /* `otf-font-awesome` is required to be installed for icons */
+  font-family: FontAwesome, Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  border-radius: 20px;
+  }
+
+window#waybar {
+background-color: @background-transparent;
+border-bottom: 0px solid @outline_variant;
+color: @on_surface;
+transition-property: background-color;
+transition-duration: .5s;
+}
+
+window#waybar.hidden {
+opacity: 0.2;
+}
+
+/*
+window#waybar.empty {
+background-color: transparent;
+}
+window#waybar.solo {
+background-color: #FFFFFF;
+}
+*/
+
+window#waybar.termite {
+background-color: @surface_container;
+}
+
+window#waybar.chromium {
+background-color: @surface;
+border: none;
+}
+
+button {
+box-shadow: inset 0 -3px transparent;
+border: none;
+border-radius: 0;
+}
+
+button:hover {
+background: inherit;
+box-shadow: inset 0 -3px @on_surface;
+}
+
+#pulseaudio:hover {
+background-color: @primary_container;
+}
+
+#workspaces button {
+padding: 0 5px;
+background-color: transparent;
+color: @on_surface;
+}
+
+#workspaces button:hover {
+background: @surface_container_highest;
+}
+
+#workspaces button.focused,
+#workspaces button.active {
+background-color: @surface_container_high;
+box-shadow: inset 0 -3px @on_surface;
+}
+
+#workspaces button.urgent {
+background-color: @error_container;
+}
+
+#mode {
+background-color: @surface_container_high;
+box-shadow: inset 0 -3px @on_surface;
+}
+
+#clock,
+#battery,
+#cpu,
+#memory,
+#disk,
+#temperature,
+#backlight,
+#network,
+#pulseaudio,
+#wireplumber,
+#custom-media,
+#tray,
+#mode,
+#idle_inhibitor,
+#scratchpad,
+#power-profiles-daemon,
+#mpd {
+padding: 0 10px;
+color: @on_surface;
+}
+
+#window,
+#workspaces {
+margin: 0 4px;
+}
+
+.modules-left > widget:first-child > #workspaces {
+margin-left: 0;
+}
+
+.modules-right > widget:last-child > #workspaces {
+margin-right: 0;
+}
+
+#clock {
+background-color: @surface_container;
+}
+
+#battery {
+background-color: @primary;
+color: @on_primary;
+}
+
+#battery.charging,
+#battery.plugged {
+color: @on_surface;
+background-color: @primary;
+}
+
+@keyframes blink {
+to {
+background-color: @surface_bright;
+color: @on_primary;
+}
+}
+
+#battery.critical:not(.charging) {
+background-color: @error_container;
+color: @on_surface;
+animation-name: blink;
+animation-duration: 0.5s;
+animation-timing-function: steps(12);
+animation-iteration-count: infinite;
+animation-direction: alternate;
+}
+
+#power-profiles-daemon {
+padding-right: 15px;
+}
+
+#power-profiles-daemon.performance {
+background-color: @error_container;
+color: @on_surface;
+}
+
+#power-profiles-daemon.balanced {
+background-color: @primary;
+color: @on_surface;
+}
+
+#power-profiles-daemon.power-saver {
+background-color: @primary_fixed;
+color: @on_primary;
+}
+
+label:focus {
+background-color: @surface;
+}
+
+#cpu {
+background-color: @primary_fixed;
+color: @on_primary;
+}
+
+#memory {
+background-color: @primary_container;
+}
+
+#disk {
+background-color: @surface_container_high;
+}
+
+#backlight {
+background-color: @outline;
+}
+
+#network {
+background-color: @primary;
+}
+
+#network.disconnected {
+background-color: @error_container;
+}
+
+#pulseaudio {
+background-color: @primary_fixed;
+color: @on_primary;
+}
+
+#pulseaudio.muted {
+background-color: @outline;
+color: @on_primary;
+}
+
+#wireplumber {
+background-color: @surface_bright;
+color: @on_primary;
+}
+
+#wireplumber.muted {
+background-color: @error_container;
+}
+
+#custom-media {
+background-color: @primary_fixed;
+color: @on_primary;
+min-width: 100px;
+}
+
+#custom-media.custom-spotify {
+background-color: @primary_fixed;
+}
+
+#custom-media.custom-vlc {
+background-color: @primary_container;
+}
+
+#temperature {
+background-color: @primary;
+}
+
+#temperature.critical {
+background-color: @error_container;
+}
+
+#tray {
+background-color: @primary;
+}
+
+#tray > .passive {
+-gtk-icon-effect: dim;
+}
+
+#tray > .needs-attention {
+-gtk-icon-effect: highlight;
+background-color: @error_container;
+}
+
+#idle_inhibitor {
+background-color: @surface_container;
+}
+
+#idle_inhibitor.activated {
+background-color: @surface_bright;
+color: @on_primary;
+}
+
+#mpd {
+background-color: @primary_fixed;
+color: @on_primary;
+}
+
+#mpd.disconnected {
+background-color: @error_container;
+}
+
+#mpd.stopped {
+background-color: @outline;
+}
+
+#mpd.paused {
+background-color: @primary_container;
+}
+
+#language {
+background: @primary_container;
+color: @surface_bright;
+padding: 0 5px;
+margin: 0 5px;
+min-width: 16px;
+}
+
+#keyboard-state {
+background: @primary_fixed;
+color: @on_primary;
+padding: 0 0px;
+margin: 0 5px;
+min-width: 16px;
+}
+
+#keyboard-state > label {
+padding: 0 5px;
+}
+
+#keyboard-state > label.locked {
+background: @surface_container_highest;
+}
+
+#scratchpad {
+background: @surface_container_highest;
+}
+
+#scratchpad.empty {
+background-color: transparent;
+}
+
+#privacy {
+padding: 0;
+}
+
+#privacy-item {
+padding: 0 5px;
+color: @on_surface;
+}
+
+#privacy-item.screenshare {
+background-color: @primary_container;
+}
+
+#privacy-item.audio-in {
+background-color: @primary;
+}
+
+#privacy-item.audio-out {
+background-color: @primary_fixed;
+}
+

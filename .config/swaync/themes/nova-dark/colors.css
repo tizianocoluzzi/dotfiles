@@ -1,0 +1,24 @@
+/* Matugen-generated palette */
+@define-color background #15130c;
+@define-color foreground #e8e2d4;
+@define-color background-sec #222017;
+
+/* Normal colors */
+@define-color color0 #100e07;
+@define-color color1 #d8c770;
+@define-color color2 #a8d0b5;
+@define-color color3 #d0c7a2;
+@define-color color4 #514700;
+@define-color color5 #4d472b;
+@define-color color6 #2a4e3a;
+@define-color color7 #ccc6b5;
+
+/* Bright colors */
+@define-color color8 #37352b;
+@define-color color9 #d8c770;
+@define-color color10 #a8d0b5;
+@define-color color11 #d0c7a2;
+@define-color color12 #514700;
+@define-color color13 #4d472b;
+@define-color color14 #2a4e3a;
+@define-color color15 #959180;

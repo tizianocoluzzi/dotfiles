@@ -1,0 +1,38 @@
+[config]
+[templates.gtk3]
+input_path = '~/.config/matugen/templates/gtk-3.css'
+output_path = '~/.config/gtk-3.0/colors.css'
+# post_hook = 'gsettings set org.gnome.desktop.interface gtk-theme ""; gsettings set org.gnome.desktop.interface gtk-theme adw-gtk3-{{mode}}'
+
+[templates.gtk4]
+input_path = '~/.config/matugen/templates/gtk-4.css'
+output_path = '~/.config/gtk-4.0/colors.css'
+# post_hook = '~/.config/matugen/post-hook-scripts/gtk-themes-reload.sh'
+#
+[templates.sway]
+input_path = '~/.config/matugen/templates/sway.conf'
+output_path = '~/.config/sway/colors.conf'
+post_hook = 'swaymsg reload'
+
+[templates.waybar]
+input_path = '~/.config/matugen/templates/waybar.css'
+output_path = '~/.config/waybar/colors.css'
+#post_hook = 'pkill -SIGUSR1 waybar'
+# ...
+#
+[templates.kitty]
+input_path = '~/.config/matugen/templates/kitty-colors.conf'
+output_path = '~/.config/kitty/themes/Matugen.conf'
+post_hook = "kitty +kitten themes --reload-in=all Matugen"
+
+[templates.swaync]
+input_path = '~/.config/matugen/templates/swaync.css'
+output_path = '~/.config/swaync/themes/nova-dark/colors.css'
+post_hook = "swaync-client -rs"
+
+[templates.neovim]
+input_path = "~/.config/matugen/templates/nvim-colors.json"
+output_path = "~/.cache/matugen/nvim-colors.json"
+post_hook = "pkill -SIGUSR1 nvim"
+
+
