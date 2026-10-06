@@ -70,13 +70,16 @@ ZSH_THEME="bira"
 # Custom plugins may be added to $ZSH_CUSTOM/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(git)
+export FZF_BASE=/usr/bin/zsh
+plugins=(git zsh-autosuggestions vi-mode fzf fzf-tab)
 source $ZSH/oh-my-zsh.sh
 
 alias ls="lsd"
 lst() {
 [[ -n "$1" ]] && lsd --tree --depth="$1" || lsd --tree  --depth=1
 }
+
+alias y="yazi"
 # User configuration
 
 # export MANPATH="/usr/local/man:$MANPATH"

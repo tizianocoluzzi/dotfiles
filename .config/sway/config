@@ -221,7 +221,7 @@ bindsym $mod+r mode "resize"
     bindsym --locked XF86MonBrightnessDown exec brightnessctl set 5%-
     bindsym --locked XF86MonBrightnessUp exec brightnessctl set 5%+
     # Special key to take a screenshot with grim
-    bindsym Print exec grim
+    bindsym Print exec grim -g "$(slurp)"
 
     for_window [app_id="org.pulseaudio.pavucontrol"] floating enable
     for_window [app_id="org.gnome.Calculator"] floating enable
@@ -245,7 +245,7 @@ bindsym $mod+r mode "resize"
 #    }
 #}
 default_border  pixel 3
-gaps    outer       6
+gaps    outer       3
 gaps    inner       6
 exec_always sh -c 'pkill -TERM -x swaync-client 2>/dev/null; sleep 0.2; pkill -KILL -x swaync-client 2>/dev/null'
 #exec_always sh -c 'pkill -x waybar 2>/dev/null; pkill -f mediaplayer.py 2>/dev/null; pkill -x swaync-client 2>/dev/null; sleep 0.2;'
