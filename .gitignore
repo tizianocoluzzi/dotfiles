@@ -1,0 +1,9 @@
+.config/btop/btop.conf
+.config/sway/colors.conf
+.config/kitty/themes/*
+.config/kitty/dark-theme.auto.conf
+.config/kitty/current-theme.auto.conf
+.config/kitty/light-theme.auto.conf
+.config/kitty/no-preference-theme.auto.conf
+.config/swaync/themes
+.config/waybar/colors.css
