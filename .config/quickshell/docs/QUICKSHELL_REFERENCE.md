@@ -1,0 +1,3164 @@
+> **Derivative work notice.** This document is largely derived from the official
+> Quickshell documentation at <https://quickshell.org/docs/v0.2.1/>, reorganized
+> for AI agent consumption and annotated with original observations. The
+> "Gotchas & quirks" section (entries #1 through #82+) represents original
+> work accumulated while building the surrounding shell project. The author
+> has not verified Quickshell's documentation license — if you intend to
+> substantially redistribute this file, check the upstream license first.
+
+---
+
+# Quickshell Reference (v0.2.1) — AI Agent Guide
+
+A comprehensive reference for building Quickshell applications, optimized for AI agent consumption. Sourced from <https://quickshell.org/docs/v0.2.1/>.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Getting Started](#getting-started)
+3. [Core Concepts](#core-concepts)
+4. [Item Sizing & Layout](#item-sizing--layout)
+5. [QML Language Cheat Sheet](#qml-language-cheat-sheet)
+6. [Modules](#modules)
+7. [Types Reference](#types-reference)
+   - [`Quickshell` module](#quickshell-module)
+   - [`Quickshell.Io`](#quickshellio)
+   - [`Quickshell.Wayland`](#quickshellwayland)
+   - [`Quickshell.Hyprland`](#quickshellhyprland)
+   - [`Quickshell.I3`](#quickshelli3)
+   - [`Quickshell.Services.SystemTray`](#quickshellservicessystemtray)
+   - [`Quickshell.Services.Mpris`](#quickshellservicesmpris)
+   - [`Quickshell.Services.Notifications`](#quickshellservicesnotifications)
+   - [`Quickshell.Services.Pipewire`](#quickshellservicespipewire)
+   - [`Quickshell.Services.UPower`](#quickshellservicesupower)
+   - [`Quickshell.Services.Pam`](#quickshellservicespam)
+   - [`Quickshell.Services.Greetd`](#quickshellservicesgreetd)
+   - [`Quickshell.Widgets`](#quickshellwidgets)
+   - [`Quickshell.DBusMenu` / `Quickshell.Bluetooth`](#quickshelldbusmenu--quickshellbluetooth)
+8. [Common Patterns / Recipes](#common-patterns--recipes)
+9. [Tips for AI Agents](#tips-for-ai-agents)
+
+---
+
+## Overview
+
+**Quickshell** is a toolkit for building Linux desktop shell components: status bars/panels, widgets, OSDs, application launchers, lockscreens, notification daemons, etc. It is configured using **QML** (Qt Modeling Language) and runs on top of **QtQuick**.
+
+### Core ideas
+
+- A Quickshell config is a tree of QML objects. The entry file is `shell.qml`.
+- **Reactive bindings**: assigning an expression to a property automatically re-evaluates when its dependencies change.
+- **Live reloading**: edit a QML file and Quickshell automatically reloads, attempting to reuse existing windows.
+- **Wayland-first** but supports X11 in some scenarios. Provides Wayland-layer-shell (`PanelWindow`/`WlrLayershell`) for bars/overlays and `ext-session-lock-v1` (`WlSessionLock`) for lockscreens.
+- **No process per widget** — keep everything in one QML config; use `Process`, `FileView`, sockets, DBus services, etc. for I/O.
+- Compositor-agnostic where possible (`Quickshell.screens`, `ToplevelManager`), with optional compositor-specific modules (`Quickshell.Hyprland`, `Quickshell.I3`).
+
+### Architecture
+
+```
+shell.qml                ← entry point (root QML object: usually ShellRoot or Scope)
+├─ Variants {            ← create a window per screen/value
+│    model: Quickshell.screens
+│    PanelWindow { ... } ← layer-shell bar
+│  }
+├─ Singleton singletons  ← shared state (e.g. clock, audio, sysinfo)
+├─ Process / FileView    ← I/O
+└─ Service singletons    ← Mpris, SystemTray, Notifications, UPower, Pipewire …
+```
+
+---
+
+## Getting Started
+
+### Installation
+
+Install via your distro: `pacman -S quickshell` (Arch), `dnf install quickshell` (Fedora), `apt install quickshell` (Ubuntu PPA), `nix` flake `git+https://git.outfoxxed.me/outfoxxed/quickshell`. See <https://quickshell.org/docs/v0.2.1/guide/install-setup>.
+
+Useful optional Qt packages:
+- `qtsvg` — SVG image loading
+- `qtimageformats` — WEBP and other formats
+- `qtmultimedia` — audio/video playback
+- `qt5compat` — Gaussian blur (or use `MultiEffect`)
+
+### Project structure
+
+Quickshell scans `$XDG_CONFIG_HOME/quickshell` (usually `~/.config/quickshell`) for configs:
+
+```
+~/.config/quickshell/
+├─ shell.qml               # default config (if no subfolders)
+└─ <name>/                 # named configs, run with: qs -c <name>
+   ├─ shell.qml            # entry point (REQUIRED)
+   ├─ Bar.qml              # uppercase = type, importable
+   ├─ ClockWidget.qml
+   ├─ singletons/
+   │  └─ Time.qml          # use `pragma Singleton`
+   └─ .qmlls.ini           # leave empty; Quickshell fills in for LSP
+```
+
+### CLI usage
+
+| Command | Purpose |
+|---|---|
+| `qs` | Launch the default config |
+| `qs -c <name>` | Launch a named config (subfolder of `quickshell` dir) |
+| `qs -p /path/to/dir-or-shell.qml` | Launch from arbitrary path |
+| `qs ipc show` | List registered `IpcHandler` targets |
+| `qs ipc call <target> <fn> [args…]` | Call an IPC function |
+| `qs ipc prop get <target> <prop>` | Read an IPC-exposed property |
+
+### Editor / LSP
+
+- Install `qmlls` (Qt's QML language server).
+- Place an empty `.qmlls.ini` next to `shell.qml` — Quickshell rewrites it with the right import paths. **Gitignore it.**
+- Caveats: `qmlls` cannot resolve `PanelWindow` and similar Quickshell types; use it as a hint, not gospel.
+
+### Pragmas
+
+Place at the top of your root `shell.qml` to override paths/themes:
+
+```qml
+//@ pragma DataDir $BASE/myshell        // overrides Quickshell.dataDir
+//@ pragma StateDir $BASE/myshell       // overrides Quickshell.stateDir
+//@ pragma IconTheme Papirus            // override icon theme (also QS_ICON_THEME)
+```
+
+For singleton files:
+
+```qml
+pragma Singleton
+import Quickshell
+Singleton { ... }
+```
+
+---
+
+## Core Concepts
+
+### `ShellRoot` and `Scope`
+
+- `ShellRoot` (`import Quickshell`): an optional root with a `settings: QuickshellSettings`. Inherits from `Scope`.
+- `Scope`: a non-visual container with a `default` `children: list<QtObject>` property. It also acts as a *reload scope* — descendants share a `reloadableId` namespace.
+- Either can serve as the root of `shell.qml`. `Scope` is preferred for minimalism.
+
+### Variants & screens
+
+`Variants` instantiates a `Component` (the `delegate`, default property) once per item in `model`. Each instance gets a `modelData` property. Common pattern:
+
+```qml
+Variants {
+    model: Quickshell.screens
+    PanelWindow {
+        required property var modelData
+        screen: modelData
+        // bar contents...
+    }
+}
+```
+
+### Reloading & `Reloadable`
+
+When QML files change, Quickshell hot-reloads, attempting to *reuse* windows by matching `Reloadable.reloadableId`. Types that subclass `Reloadable` (PanelWindow, FloatingWindow, PopupWindow, LazyLoader, Variants, PersistentProperties, WlSessionLock, ...) can be reused.
+
+- `LazyLoader` always loads synchronously during reload to allow window reuse.
+- Use `PersistentProperties { reloadableId: "..."; property bool foo: false }` to keep stateful flags across reloads.
+- `Quickshell.reload(hard: bool)` triggers a reload programmatically (`hard=true` recreates windows).
+- `Quickshell.watchFiles` (defaults to `true`) controls auto-reload on file change.
+
+### Singletons
+
+- File-level: `pragma Singleton` at top, root must be a `Singleton {}` (which is a `Scope`). Reference globally as `MyType.prop`.
+- Connect to a singleton's signals from elsewhere via `Connections { target: MyType; function onSomeSignal() {} }`.
+
+### IPC (`IpcHandler`)
+
+Each `IpcHandler` registers under a unique `target`. Methods with at most 10 args of `string`/`int`/`bool`/`real`/`color` (and matching return type) are callable from the CLI:
+
+```qml
+IpcHandler {
+    target: "rect"
+    function setColor(color: color): void { rect.color = color }
+}
+```
+
+```bash
+qs ipc call rect setColor "#ff0000"
+qs ipc prop get rect someProperty
+```
+
+### Reactive bindings & avoiding loops
+
+- A property assignment `text: foo + bar` is reactive — re-evaluates when `foo` or `bar` change.
+- Avoid `childrenRect.width` for sizing parent — that's a binding loop. See [Item Sizing](#item-sizing--layout).
+- Use `Component.onCompleted: text = expr` if you need a one-off non-reactive assignment.
+- Use `Qt.binding(() => expr)` to *create* a binding from imperative code.
+
+### Retainable
+
+Some types (e.g. `Notification`) are *retainable*: they can be kept alive in QML even after the underlying object is destroyed by attaching a `RetainableLock`. Useful for fade-out animations on removal.
+
+### LazyLoader vs Loader
+
+- `Loader` (QtQuick) — only for `Item` (visual) components.
+- `LazyLoader` (Quickshell) — for non-Item components (e.g. windows, scopes). Loads asynchronously between frames if `loading: true` or `activeAsync: true`. Set `active: true` to force synchronous load. Read `loader.item` to get the loaded object.
+
+---
+
+## Item Sizing & Layout
+
+> **Critical**: implicit size flows **child → parent**, actual size flows **parent → child**.
+
+Every `Item` has:
+- `implicitWidth` / `implicitHeight` — *desired* size.
+- `width` / `height` — *actual* size.
+
+If an item is inside a container (Layout, WrapperItem, etc.), **set `implicitWidth/Height`, not `width/height`**.
+
+### Common pitfalls
+
+- **Zero-sized items**: many QtQuick `Item`s default to size 0 — set `implicitWidth/Height` or you'll see a "phantom" widget.
+- **`childrenRect` causes binding loops** — never use `childrenRect.width` to size a container; use the child's `implicitWidth` instead, or use a `WrapperItem`/`MarginWrapperManager`.
+- **Anchors**: prefer `anchors.fill: parent` + `anchors.margins: 5` over manual x/y/width/height.
+- **`Row`/`Column` vs `RowLayout`/`ColumnLayout`**: prefer `*Layout` types — they pixel-align children and support the `Layout.*` attached object. `Row`/`Column` use `spacing` and don't pixel-align.
+
+### Wrapper components (`Quickshell.Widgets`)
+
+- `WrapperItem` — adds margins around a single child Item.
+- `WrapperRectangle` — same, but the wrapper is a `Rectangle` (border/background).
+- `WrapperMouseArea` — wrapper that's a `MouseArea`.
+- `ClippingRectangle` / `ClippingWrapperRectangle` — clipping `Rectangle` (e.g. for rounded images).
+- `MarginWrapperManager` — attached helper that automates the size/margin relationship.
+
+---
+
+## QML Language Cheat Sheet
+
+### Imports
+
+```qml
+import QtQuick                              // QtQuick types (Rectangle, Text, Image, …)
+import QtQuick.Layouts                      // RowLayout, ColumnLayout, GridLayout
+import Quickshell                           // PanelWindow, ShellRoot, Variants, …
+import Quickshell.Io                        // Process, FileView, IpcHandler, Socket, …
+import Quickshell.Wayland                   // WlSessionLock, ToplevelManager, …
+import Quickshell.Hyprland                  // Hyprland, HyprlandWorkspace, GlobalShortcut
+import Quickshell.Services.Mpris            // Mpris, MprisPlayer
+import Quickshell.Services.SystemTray
+import Quickshell.Services.Notifications
+import Quickshell.Services.Pipewire
+import Quickshell.Services.UPower
+import Quickshell.Services.Pam
+import Quickshell.Services.Greetd
+import Quickshell.Widgets                   // IconImage, WrapperRectangle, …
+
+import qs.modules.bar     // Quickshell module path: relative to shell.qml dir (v0.2+)
+import qs as Root         // import the entire shell folder under namespace `Root`
+```
+
+### Property definitions
+
+```qml
+[required] [readonly] [default] property <type> <name>[: <binding>]
+```
+
+- `required` — instantiator must set it.
+- `readonly` — no assignment after definition (binding still re-evaluates).
+- `default` — assignment without explicit name binds here.
+
+```qml
+property int count: 0
+required property var modelData
+readonly property string greet: "Hello, " + name
+property alias inner: child   // bidirectional alias
+```
+
+### Signals & handlers
+
+```qml
+signal foo(bar: int)            // declaration
+
+onFoo: console.log(bar)         // implicit handler (function `onSignal`)
+
+onWidthChanged: console.log(width)  // every property has a `<name>Changed` signal
+
+Connections {                   // indirect handler
+    target: someSingleton
+    function onSomeSignal() {}
+}
+
+Component.onCompleted: { ... }  // attached signal handler — runs once on init
+```
+
+### Functions and lambdas
+
+```qml
+function dub(x: int): int { return x * 2 }
+property var op: x => x * 2
+property var op2: (a, b) => { return a + b }
+```
+
+### Inline components & singletons
+
+```qml
+component MyText: Text {        // inline-only type, scoped to file
+    color: "red"
+}
+
+// singletons.qml
+pragma Singleton
+import Quickshell
+Singleton {
+    property string foo: "hi"
+}
+```
+
+### Default property assignment
+
+`Variants.delegate`, `LazyLoader.component`, `Scope.children`, `WlSessionLock.surface`, `IconImage.implicitSize`, etc. are *default* properties; you can omit the name:
+
+```qml
+Variants {              // delegate is default
+    model: Quickshell.screens
+    PanelWindow { ... } // implicitly assigned to delegate
+}
+```
+
+---
+
+## Modules
+
+| Module | Import | Purpose |
+|---|---|---|
+| `Quickshell` | `import Quickshell` | Core: windows, scopes, screens, reloading, settings |
+| `Quickshell.Io` | `import Quickshell.Io` | Process exec, file I/O, sockets, IPC, JSON |
+| `Quickshell.Wayland` | `import Quickshell.Wayland` | wlr-layer-shell, session lock, foreign toplevels, screencopy |
+| `Quickshell.Hyprland` | `import Quickshell.Hyprland` | Hyprland IPC, workspaces, monitors, global shortcuts, focus grab |
+| `Quickshell.I3` | `import Quickshell.I3` | i3/Sway IPC |
+| `Quickshell.Bluetooth` | `import Quickshell.Bluetooth` | Bluetooth devices and adapters |
+| `Quickshell.DBusMenu` | `import Quickshell.DBusMenu` | DBusMenu (system tray context menus) |
+| `Quickshell.Services.Mpris` | … | Media player control / metadata |
+| `Quickshell.Services.SystemTray` | … | StatusNotifierItem tray |
+| `Quickshell.Services.Notifications` | … | XDG notifications daemon implementation |
+| `Quickshell.Services.Pipewire` | … | PipeWire audio (sinks/sources/streams/volume) |
+| `Quickshell.Services.UPower` | … | Battery / AC / display device |
+| `Quickshell.Services.Pam` | … | PAM authentication for lockscreens/greeters |
+| `Quickshell.Services.Greetd` | … | greetd display manager integration |
+| `Quickshell.Widgets` | … | Bundled wrapper widgets (IconImage, ClippingRectangle, …) |
+
+---
+
+## Types Reference
+
+> **Notation**: `inherits → Parent`. `singleton` means accessed by type name, no instantiation. `uncreatable` means produced internally; you can't `new` one but you read references from other APIs.
+
+### `Quickshell` module
+
+`import Quickshell`
+
+#### `ShellRoot` *(inherits `Scope`)*
+Optional root of a config. Adds `settings: QuickshellSettings` (readonly).
+
+#### `Scope` *(inherits `Reloadable`)*
+Non-visual container. Default property: `children: list<QtObject>`. Acts as a reload scope so children share `reloadableId` lookup with the scope.
+
+#### `Singleton` *(inherits `Scope`)*
+Use as the root of any `pragma Singleton` file.
+
+#### `Variants` *(inherits `Reloadable`)*
+Creates a delegate per `model` value. Properties:
+
+| Property | Type | Description |
+|---|---|---|
+| `model` | `list<variant>` | values to produce instances for |
+| `delegate` *(default)* | `Component` | template; gets a `modelData` property per instance |
+| `instances` *(readonly)* | `list<QtObject>` | live instances |
+
+#### `Quickshell` *(singleton)*
+Global object — main entry to engine info.
+
+| Property | Type | Description |
+|---|---|---|
+| `screens` *(readonly)* | `list<ShellScreen>` | live list of monitors |
+| `shellDir` *(readonly)* | `string` | folder containing `shell.qml` |
+| `dataDir` / `cacheDir` / `stateDir` *(readonly)* | `string` | per-shell XDG dirs |
+| `workingDirectory` | `string` | CWD of qs process |
+| `clipboardText` | `string` | system clipboard (Wayland: only when a qs window is focused) |
+| `processId` *(readonly)* | `int` | qs PID |
+| `watchFiles` | `bool` | auto-reload (default `true`) |
+
+| Function | Returns | Description |
+|---|---|---|
+| `iconPath(icon: string)` | `string` | Image source for a system icon |
+| `iconPath(icon, check: bool)` | `string` | empty string if missing (avoids purple/black square) |
+| `iconPath(icon, fallback: string)` | `string` | use fallback if missing |
+| `shellPath(path)` / `cachePath(path)` / `dataPath(path)` / `statePath(path)` | `string` | join with respective dir |
+| `env(name: string)` | `variant` | env var or null |
+| `execDetached(ctx)` | `void` | fire-and-forget process; ctx = list or `{command, environment, clearEnvironment, workingDirectory}` |
+| `reload(hard: bool)` | `void` | reload shell |
+| `inhibitReloadPopup()` | `void` | call from `reloadCompleted`/`reloadFailed` to suppress popup |
+
+| Signal | Description |
+|---|---|
+| `reloadCompleted()` | reload succeeded |
+| `reloadFailed(errorString: string)` | reload failed |
+| `lastWindowClosed()` | last window closed (use `Qt.quit()` to exit) |
+
+#### `QsWindow` *(uncreatable, inherits `Reloadable`)*
+Base class for all Quickshell windows. Attached to any `Item`: `QsWindow.window` and `QsWindow.contentItem` are available.
+
+| Property | Type | Description |
+|---|---|---|
+| `screen` | `ShellScreen` | which monitor |
+| `color` | `color` | background color (default white) |
+| `visible` | `bool` | shown/hidden |
+| `width` / `height` | `int` | actual window size (deprecated to *set* — use `implicitWidth/Height`) |
+| `implicitWidth` / `implicitHeight` | `int` | desired size |
+| `mask` | `Region` | clickthrough mask; build it from explicit geometry (gotcha #81) |
+| `surfaceFormat` | `{opaque: bool}` | request opaque/transparent surface (set before window shown) |
+| `devicePixelRatio` *(readonly)* | `real` | logical→physical pixels |
+| `contentItem` *(readonly)* | `Item` | root child item container |
+
+| Function | Returns | Description |
+|---|---|---|
+| `itemPosition(item)` | `point` | item pos in window coords (non-reactive) |
+| `itemRect(item)` | `rect` | |
+| `mapFromItem(item, x, y)` / `(item, point)` / `(item, rect)` / `(item, x, y, w, h)` | `point`/`rect` | coordinate map |
+
+| Signal | Description |
+|---|---|
+| `closed()` | window closed by user/server (NOT when `visible = false`) |
+| `resourcesLost()` | typically OOM/VRAM; `closed()` follows |
+| `windowConnected()` | window has been connected to display server |
+
+#### `PanelWindow` *(inherits `QsWindow`)*
+Decorationless layer-shell window for bars/overlays. **Most common window type.**
+
+```qml
+PanelWindow {
+    anchors { top: true; left: true; right: true }
+    implicitHeight: 30
+    color: "#222"
+    Text { anchors.centerIn: parent; text: "Hello" }
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `anchors` | `{top, bottom, left, right: bool}` | which edges to attach (default all `false`). Two opposite anchors → that dimension matches the screen. |
+| `aboveWindows` | `bool` | render above normal windows (default `true`). On Wayland, maps to `WlrLayershell.layer`. |
+| `focusable` | `bool` | accept keyboard focus (default `false`). On Wayland, maps to `WlrLayershell.keyboardFocus`. |
+| `exclusiveZone` | `int` | reserved space (sets `exclusionMode = Normal` automatically). Need 1 or 3 anchors. |
+| `margins` | `{top, bottom, left, right: int}` | offsets from anchored sides only |
+| `exclusionMode` | `ExclusionMode` | `Auto` (default), `Normal`, `Ignore` |
+
+#### `FloatingWindow` *(inherits `QsWindow`)*
+Standard application-style window with title bar.
+
+| Property | Type | Description |
+|---|---|---|
+| `title` | `string` | window title |
+| `minimumSize` / `maximumSize` | `size` | size constraints |
+
+#### `PopupWindow` *(inherits `QsWindow`)*
+Popup positioned relative to another window/item via `anchor`.
+
+```qml
+PanelWindow {
+    id: bar
+    PopupWindow {
+        anchor.window: bar
+        anchor.rect.x: bar.width / 2 - width/2
+        anchor.rect.y: bar.height
+        width: 300; height: 200
+        visible: trigger.opened
+    }
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `anchor` *(readonly)* | `PopupAnchor` | positioner |
+| `visible` | `bool` | shown only when also valid anchor |
+| `screen` *(readonly)* | `ShellScreen` | |
+| `grabFocus` | `bool` | take an xdg_popup grab (default `false`). Needed for keyboard input, together with a focusable parent layer surface on niri; also makes an outside click close the popup. Read at window creation. See gotcha #79. |
+
+#### `PopupAnchor` *(uncreatable)*
+Configures a popup's position relative to a `window` or `item`.
+
+| Property | Type | Description |
+|---|---|---|
+| `window` | `QtObject` | parent window (mutually exclusive with `item`) |
+| `item` | `Item` | item to anchor to (sets `window` automatically) |
+| `rect` | `{x, y, width, height: int}` | anchor rect (relative) |
+| `edges` | `Edges` | which corner of rect to anchor at (default `Top \| Left`) |
+| `gravity` | `Edges` | direction to expand (default `Bottom \| Right`) |
+| `margins` | `{left, top, right, bottom: int}` | inset from rect |
+| `adjustment` | `PopupAdjustment` | repositioning strategy if won't fit on screen |
+
+| Function / Signal | Description |
+|---|---|
+| `updateAnchor()` | recompute anchor (e.g. after item moved) |
+| `anchoring()` *signal* | emitted right before showing — modify `rect` here using coordinate-mapping |
+
+#### `LazyLoader` *(inherits `Reloadable`)*
+Loads a `Component`/source asynchronously between frames.
+
+| Property | Type | Description |
+|---|---|---|
+| `loading` | `bool` | currently loading async |
+| `active` | `bool` | force *synchronous* load; setting false destroys |
+| `activeAsync` | `bool` | start loading async; reading is same as `active` |
+| `component` *(default)* | `Component` | inline component to load |
+| `source` | `string` | URI to load from (mutually exclusive with `component`) |
+| `item` *(readonly)* | `QtObject` | loaded object (or null). Reading while loading blocks! |
+
+⚠ `LazyLoader` does NOT start loading until the first window has been created. ⚠ `Variants` inside `LazyLoader` blocks (no async support).
+
+#### `Singleton`
+See above. Use as root of `pragma Singleton` files.
+
+#### `SystemClock`
+A reactive view of the system clock. Cheaper than `Date`-based polling.
+
+| Property | Type | Description |
+|---|---|---|
+| `enabled` | `bool` | pause if false |
+| `precision` | `enum` | `SystemClock.Hours` / `Minutes` / `Seconds` (default `Seconds`) |
+| `date` *(readonly)* | `date` | current date/time |
+| `hours` / `minutes` / `seconds` *(readonly)* | `int` | individual fields |
+
+```qml
+SystemClock { id: clock; precision: SystemClock.Minutes }
+Text { text: Qt.formatDateTime(clock.date, "HH:mm") }
+```
+
+#### `PersistentProperties` *(inherits `Reloadable`)*
+Keeps custom property values across hot reloads.
+
+```qml
+PersistentProperties {
+    id: persist
+    reloadableId: "uiState"
+    property bool expanderOpen: false
+}
+```
+
+| Signal | Description |
+|---|---|
+| `loaded()` | every reload (initial too) |
+| `reloaded()` | only when a previous instance was reused |
+
+#### `ShellScreen` *(uncreatable)*
+A monitor. Properties: `name` (e.g. `"DP-1"`), `model`, `serialNumber`, `width`/`height`/`x`/`y` (logical px), `devicePixelRatio`, `physicalPixelDensity`, `logicalPixelDensity`, `orientation`, `primaryOrientation`. Function: `toString()`.
+
+#### `DesktopEntries` *(singleton)*
+Index of `.desktop` files.
+
+| Property | Type | Description |
+|---|---|---|
+| `applications` *(readonly)* | `ObjectModel<DesktopEntry>` | non-Hidden, non-NoDisplay Application entries |
+
+| Function | Returns | Description |
+|---|---|---|
+| `byId(id: string)` | `DesktopEntry` | exact match (incl. NoDisplay) — may be `null` |
+| `heuristicLookup(name: string)` | `DesktopEntry` | fuzzy match |
+
+#### `DesktopEntry` *(uncreatable)*
+Properties: `id`, `name`, `genericName`, `comment`, `icon`, `command` (parsed `Exec` as list), `execString` (raw, **don't run**), `workingDirectory`, `runInTerminal`, `noDisplay`, `categories: list<string>`, `keywords: list<string>`, `startupClass`, `actions: list<DesktopAction>`. Method: `execute()`.
+
+#### `DesktopAction`
+A sub-action of a `DesktopEntry`. Has `name`, `icon`, `command`, and `execute()`.
+
+#### `Edges`
+Bitfield enum: `Edges.Left`, `Edges.Right`, `Edges.Top`, `Edges.Bottom`. Combine with `|`.
+
+#### `ExclusionMode`
+Enum: `ExclusionMode.Auto`, `ExclusionMode.Normal`, `ExclusionMode.Ignore`.
+
+#### `PopupAdjustment`
+Enum controlling how popups reposition if they don't fit. Values include `None`, `SlideX`, `SlideY`, `FlipX`, `FlipY`, `Resize`, `All` (combined). See docs.
+
+#### `Region` / `RegionShape` / `Intersection`
+Used for `QsWindow.mask` to control click-through and shaping.
+
+```qml
+mask: Region { item: rect; intersection: Intersection.Xor }
+```
+
+`Intersection` values: `Combine` (default — region is mask), `Subtract`, `Xor`, `Intersect`.
+
+#### `ObjectModel<T>` *(uncreatable)*
+A typed list-like model used everywhere (e.g. `Mpris.players`, `SystemTray.items`, `ToplevelManager.toplevels`). Has:
+
+| Property / Function / Signal | Description |
+|---|---|
+| `values: list<T>` *(readonly)* | underlying list (use this for reactive index access) |
+| `indexOf(object): int` | |
+| `objectInsertedPre/Post(object, index)` | |
+| `objectRemovedPre/Post(object, index)` | |
+
+Note: `model[3]` is **not** reactive — use `model.values[3]`.
+
+#### `ObjectRepeater`
+Like QtQuick's `Repeater`, but for non-Item objects.
+
+#### `Reloadable` *(uncreatable)*
+Base for everything that participates in hot-reload. Has `reloadableId: string` — set this on items you want reused across reloads.
+
+#### `Retainable` / `RetainableLock`
+Mixin for objects (notably `Notification`) that can be kept alive after being "destroyed". Add `RetainableLock { object: notif; locked: true }` to defer destruction.
+
+#### `Other useful types`
+- `BoundComponent` — like `Component` but auto-binds passed properties.
+- `ColorQuantizer` — extract dominant colors from an image.
+- `EasingCurve` — easing curves usable for animations.
+- `ElapsedTimer` — high-resolution stopwatch.
+- `ScriptModel` — JS-array-backed `QAbstractListModel` for use with `Repeater`/`ListView`.
+- `TransformWatcher` — observe geometry transform changes of an item.
+- `QuickshellSettings` — `lastWindowClosedAction`: `Qt.QuitOnLastWindowClosed` or similar.
+
+#### `QsMenuAnchor`, `QsMenuOpener`, `QsMenuEntry`, `QsMenuHandle`, `QsMenuButtonType`
+Generic menu types used with `SystemTrayItem.menu`.
+
+```qml
+QsMenuOpener {
+    id: opener
+    menu: trayItem.menu
+}
+// then iterate opener.children which are QsMenuEntry
+```
+
+`QsMenuEntry` has `text`, `icon`, `enabled`, `buttonType` (`None`/`CheckBox`/`RadioButton`), `checkState`, `hasChildren`, `isSeparator`. Call `entry.triggered()` to invoke.
+
+---
+
+### `Quickshell.Io`
+
+`import Quickshell.Io`
+
+#### `Process`
+Run a command. **Does NOT run via shell** — pass each arg separately or use `["sh", "-c", "..."]`.
+
+```qml
+Process {
+    command: ["pamixer", "--get-volume"]
+    running: true
+    stdout: StdioCollector { onStreamFinished: console.log(text) }
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `command` | `list<string>` | argv |
+| `running` | `bool` | start/stop process; setting false sends SIGTERM |
+| `processId` *(readonly)* | `variant` | PID or null |
+| `workingDirectory` | `string` | |
+| `environment` | `object` | env overrides; `key: null` removes |
+| `clearEnvironment` | `bool` | start from empty env (default false) |
+| `stdout` | `DataStreamParser` | parser to attach (`StdioCollector` or `SplitParser`); set `null` to close |
+| `stderr` | `DataStreamParser` | as above |
+| `stdinEnabled` | `bool` | enable `write()` (default false) |
+
+| Function | Description |
+|---|---|
+| `exec(ctx)` | restart with new args/env (ctx = `{command, environment, clearEnvironment, workingDirectory}`) |
+| `signal(sig: int)` | send a Unix signal |
+| `startDetached()` | fork-detach a copy (not tracked); same as `Quickshell.execDetached` |
+| `write(data: string)` | write to stdin (needs `stdinEnabled: true`) |
+
+| Signal | Description |
+|---|---|
+| `started()` | |
+| `exited(exitCode: int, exitStatus)` | |
+
+To poll: `Timer { running: true; repeat: true; interval: 1000; onTriggered: proc.running = true }` (relies on `onRunningChanged` rerun pattern).
+
+#### `StdioCollector` *(inherits `DataStreamParser`)*
+Buffers all output until end-of-stream.
+
+| Property | Type | Description |
+|---|---|---|
+| `text` *(readonly)* | `string` | buffered text |
+| `data` *(readonly)* | `ArrayBuffer` | buffered bytes |
+| `waitForEnd` | `bool` | only update on stream end (default true) |
+
+| Signal | Description |
+|---|---|
+| `streamFinished()` | EOF reached |
+
+#### `SplitParser` *(inherits `DataStreamParser`)*
+Emits each chunk delimited by `splitMarker` (default `\n`).
+
+```qml
+Process {
+    command: ["hyprctl", "events"]
+    running: true
+    stdout: SplitParser { onRead: line => console.log(line) }
+}
+```
+
+`DataStreamParser`'s base signal: `read(data: string)`.
+
+#### `FileView`
+Read or write a file (small/medium, no seeking).
+
+```qml
+FileView {
+    path: Qt.resolvedUrl("./config.json")
+    blockLoading: true   // OK only at startup
+    onLoaded: console.log(text())
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `path` | `string` | path (or empty to unload) |
+| `preload` | `bool` | start loading immediately (default true) |
+| `blockLoading` | `bool` | block UI on `text()`/`data()` if not yet loaded |
+| `blockAllReads` | `bool` | block on every `path` change too — rarely needed |
+| `blockWrites` | `bool` | block on `setText`/`setData` |
+| `atomicWrites` | `bool` | rename-over-target on save (default true) |
+| `watchChanges` | `bool` | emit `fileChanged` on disk modification |
+| `printErrors` | `bool` | log read/write errors (default true) |
+| `loaded` *(readonly)* | `bool` | a file is currently loaded |
+| `adapter` *(default)* | `FileViewAdapter` | e.g. `JsonAdapter` |
+
+| Function | Returns | Description |
+|---|---|---|
+| `text()` | `string` | full file as text (reactive — `textChanged` fires) |
+| `data()` | `ArrayBuffer` | full file as bytes |
+| `setText(s)` / `setData(buf)` | `void` | write |
+| `reload()` | `void` | re-read same path |
+| `writeAdapter()` | `void` | save adapter state to disk |
+| `waitForJob()` | `bool` | block on current async load |
+
+| Signal | Description |
+|---|---|
+| `loaded()` / `loadFailed(err: FileViewError)` | |
+| `saved()` / `saveFailed(err)` | |
+| `fileChanged()` | (only if `watchChanges`) |
+| `adapterUpdated()` | |
+
+#### `JsonAdapter` / `JsonObject`
+Adapter that exposes JSON as a tree of `JsonObject`s (sub-`property` notation). Combine with `FileView` for typed config files.
+
+#### `IpcHandler`
+See [Core Concepts → IPC](#ipc-ipchandler).
+
+| Property | Type | Description |
+|---|---|---|
+| `target` | `string` | unique key to address (required) |
+| `enabled` | `bool` | accept calls (default true) |
+
+Functions: any QML function with `int`/`bool`/`string`/`real`/`color` args (≤10) and matching return type. **Type annotations are required** or the function isn't registered.
+
+#### `Socket` *(inherits `DataStream`)*
+Unix socket client. Useful for compositor IPC (e.g. Hyprland event socket).
+
+| Property | Type | Description |
+|---|---|---|
+| `path` | `string` | unix path |
+| `connected` | `bool` | get/set target connection state |
+
+| Function | Description |
+|---|---|
+| `write(data: string)` | queue data |
+| `flush()` | flush queued writes |
+
+| Signal | Description |
+|---|---|
+| `error(error)` | socket error |
+
+`DataStream` adds a `parser: DataStreamParser` property and inherits standard IO semantics.
+
+#### `SocketServer`
+Unix socket listener that emits `Socket` connections via a `handler: Component`.
+
+#### `DataStream` / `DataStreamParser`
+Base IO types. Use `SplitParser` or `StdioCollector` as concrete parsers.
+
+---
+
+### `Quickshell.Wayland`
+
+`import Quickshell.Wayland`
+
+#### `WlrLayershell` *(inherits `PanelWindow`)*
+Wayland-specific extension of `PanelWindow`. **Use as an attached object** to keep code platform-portable:
+
+```qml
+PanelWindow {
+    WlrLayershell.layer: WlrLayer.Bottom
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+    WlrLayershell.namespace: "myshell-bar"
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `layer` | `WlrLayer` | `Background` / `Bottom` / `Top` (default) / `Overlay` |
+| `keyboardFocus` | `WlrKeyboardFocus` | `None` (default) / `Exclusive` / `OnDemand` |
+| `namespace` | `string` | wlr namespace (cannot change after `windowConnected`) |
+
+#### `WlSessionLock` *(inherits `Reloadable`)*
+Implements `ext_session_lock_v1` for full lockscreens.
+
+```qml
+WlSessionLock {
+    id: lock
+    locked: true
+    WlSessionLockSurface {
+        Rectangle { anchors.fill: parent; color: "black" }
+        Button { text: "unlock"; onClicked: lock.locked = false }
+    }
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `locked` | `bool` | request lock/unlock |
+| `secure` *(readonly)* | `bool` | compositor confirmed all screens are covered |
+| `surface` *(default)* | `Component` | must produce a `WlSessionLockSurface` |
+
+⚠ **If qs dies while locked, conformant compositors keep the screen locked**. That's the security guarantee.
+
+#### `WlSessionLockSurface` *(inherits `Reloadable`)*
+Surface displayed by `WlSessionLock` per screen.
+
+| Property | Type | Description |
+|---|---|---|
+| `screen` *(readonly)* | `ShellScreen` | |
+| `width` / `height` *(readonly)* | `int` | |
+| `color` | `color` | bg color (default white). Transparent is buggy; layer your own opaque content. |
+| `contentItem` *(readonly)* | `Item` | |
+| `visible` *(readonly)* | `bool` | |
+
+#### `ToplevelManager` *(singleton)*
+Lists windows from other apps via `zwlr-foreign-toplevel-management-v1`.
+
+| Property | Type | Description |
+|---|---|---|
+| `toplevels` *(readonly)* | `ObjectModel<Toplevel>` | all open windows |
+| `activeToplevel` *(readonly)* | `Toplevel` | currently focused (or null) |
+
+#### `Toplevel` *(uncreatable)*
+A foreign window.
+
+| Property | Type | Description |
+|---|---|---|
+| `appId` *(readonly)* | `string` | |
+| `title` *(readonly)* | `string` | |
+| `activated` *(readonly)* | `bool` | focused |
+| `maximized` / `minimized` / `fullscreen` | `bool` | request changes |
+| `parent` *(readonly)* | `Toplevel` | parent if modal/dialog |
+| `screens` *(readonly)* | `list<ShellScreen>` | |
+
+| Function | Description |
+|---|---|
+| `activate()` | request focus |
+| `close()` | request close |
+| `fullscreenOn(screen)` | |
+| `setRectangle(window, rect)` / `unsetRectangle()` | hint for minimize animations |
+
+#### `WlrKeyboardFocus`
+Enum for `WlrLayershell.keyboardFocus`: `None`, `Exclusive`, `OnDemand`.
+
+#### `WlrLayer`
+Enum: `Background`, `Bottom`, `Top`, `Overlay`.
+
+#### `ScreencopyView`
+Live screen capture. Use as an `Item` showing screen contents.
+
+---
+
+### `Quickshell.Hyprland`
+
+`import Quickshell.Hyprland`
+
+#### `Hyprland` *(singleton)*
+Top-level Hyprland integration.
+
+| Property | Type | Description |
+|---|---|---|
+| `monitors` *(readonly)* | `ObjectModel<HyprlandMonitor>` | |
+| `focusedMonitor` *(readonly)* | `HyprlandMonitor` | |
+| `workspaces` *(readonly)* | `ObjectModel<HyprlandWorkspace>` | sorted by id |
+| `focusedWorkspace` *(readonly)* | `HyprlandWorkspace` | |
+| `toplevels` *(readonly)* | `ObjectModel<HyprlandToplevel>` | |
+| `activeToplevel` *(readonly)* | `HyprlandToplevel` | |
+| `requestSocketPath` *(readonly)* | `string` | `.socket.sock` |
+| `eventSocketPath` *(readonly)* | `string` | `.socket2.sock` |
+
+| Function | Description |
+|---|---|
+| `dispatch(request: string)` | run any Hyprland dispatcher (e.g. `"workspace 1"`, `"exec firefox"`) |
+| `monitorFor(screen: ShellScreen)` | get HyprlandMonitor by screen |
+| `refreshMonitors()` / `refreshWorkspaces()` / `refreshToplevels()` | force-refresh state |
+
+| Signal | Description |
+|---|---|
+| `rawEvent(event: HyprlandEvent)` | every event from socket2; see Hyprland Wiki: IPC |
+
+#### `HyprlandWorkspace` *(uncreatable)*
+| Property | Type | Description |
+|---|---|---|
+| `id`, `name` | `int`, `string` | named workspaces have negative ids |
+| `active` *(readonly)* | `bool` | active on its monitor |
+| `focused` *(readonly)* | `bool` | active *and* monitor is focused |
+| `urgent` *(readonly)* | `bool` | has urgent client |
+| `hasFullscreen` *(readonly)* | `bool` | |
+| `monitor` *(readonly)* | `HyprlandMonitor` | |
+| `toplevels` *(readonly)* | `ObjectModel` | windows on this ws |
+| `lastIpcObject` *(readonly)* | `var` | raw JSON dump (call `Hyprland.refreshWorkspaces()` to update) |
+
+| Function | Description |
+|---|---|
+| `activate()` | switch to this workspace (≡ `Hyprland.dispatch("workspace " + name)`) |
+
+#### `HyprlandMonitor` *(uncreatable)*
+Properties: `id`, `name`, `description`, `x`, `y`, `width`, `height`, `scale`, `focused`, `activeWorkspace`, `lastIpcObject`.
+
+#### `HyprlandToplevel` / `HyprlandWindow` / `HyprlandEvent` / `HyprlandFocusGrab`
+- `HyprlandWindow` — class info (similar to `Toplevel`).
+- `HyprlandEvent` — has `name: string`, `data: string`, `parse()` to extract args.
+- `HyprlandFocusGrab` — captures clicks/keys outside a window for popup-dismiss behavior.
+
+#### `GlobalShortcut`
+Register a Hyprland global shortcut bindable in `hyprland.conf` as `bind = MOD, KEY, global, <appid>:<name>`.
+
+```qml
+GlobalShortcut {
+    name: "togglePanel"
+    description: "Show/hide the panel"
+    onPressed: panel.visible = !panel.visible
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `name` | `string` | required, no spaces |
+| `description` | `string` | shown in `hyprctl globalshortcuts` |
+| `appid` | `string` | default `"quickshell"` |
+| `triggerDescription` | `string` | unused, included for completeness |
+| `pressed` *(readonly)* | `bool` | currently held |
+
+| Signals | |
+|---|---|
+| `pressed()` | |
+| `released()` | |
+
+---
+
+### `Quickshell.I3`
+
+`import Quickshell.I3`
+
+#### `I3` *(singleton)*
+Equivalent to `Hyprland` but for i3/Sway.
+
+| Property | Type | Description |
+|---|---|---|
+| `socketPath` *(readonly)* | `string` | |
+| `monitors` *(readonly)* | `ObjectModel<I3Monitor>` | |
+| `focusedMonitor` *(readonly)* | `I3Monitor` | |
+| `workspaces` *(readonly)* | `ObjectModel<I3Workspace>` | |
+| `focusedWorkspace` *(readonly)* | `I3Workspace` | |
+
+| Function | Description |
+|---|---|
+| `dispatch(cmd: string)` | run i3/Sway command |
+| `findMonitorByName(name)` / `findWorkspaceByName(name)` | lookup helpers |
+| `monitorFor(screen)` | `I3Monitor` for a `ShellScreen` |
+| `refreshMonitors()` / `refreshWorkspaces()` | |
+
+| Signal | |
+|---|---|
+| `connected()` | |
+| `rawEvent(event: I3Event)` | |
+
+#### `I3Workspace` / `I3Monitor` / `I3Event`
+Analogous to Hyprland equivalents.
+
+---
+
+### `Quickshell.Services.SystemTray`
+
+`import Quickshell.Services.SystemTray`
+
+#### `SystemTray` *(singleton)*
+Referencing this singleton starts the StatusNotifierWatcher service.
+
+| Property | Type | Description |
+|---|---|---|
+| `items` *(readonly)* | `ObjectModel<SystemTrayItem>` | |
+
+#### `SystemTrayItem` *(uncreatable)*
+| Property | Type | Description |
+|---|---|---|
+| `id` *(readonly)* | `string` | unique app name |
+| `title` *(readonly)* | `string` | |
+| `icon` *(readonly)* | `string` | image source |
+| `tooltipTitle` / `tooltipDescription` *(readonly)* | `string` | |
+| `category` *(readonly)* | `Category` | `ApplicationStatus`, `Communications`, `SystemServices`, `Hardware` |
+| `status` *(readonly)* | `Status` | `Passive`, `Active`, `NeedsAttention` |
+| `menu` *(readonly)* | `QsMenuHandle` | use with `QsMenuAnchor`/`QsMenuOpener` |
+| `hasMenu` / `onlyMenu` *(readonly)* | `bool` | |
+
+| Function | Description |
+|---|---|
+| `activate()` | left-click |
+| `secondaryActivate()` | middle-click |
+| `scroll(delta: int, horizontal: bool)` | wheel |
+| `display(parentWindow, relativeX, relativeY)` | show platform menu at point |
+
+| Signal | |
+|---|---|
+| `ready()` | item finished loading metadata |
+
+---
+
+### `Quickshell.Services.Mpris`
+
+`import Quickshell.Services.Mpris`
+
+#### `Mpris` *(singleton)*
+| Property | Type | Description |
+|---|---|---|
+| `players` *(readonly)* | `ObjectModel<MprisPlayer>` | all DBus MPRIS players |
+
+#### `MprisPlayer` *(uncreatable)*
+**Always check the `canX` / `xSupported` properties before relying on a feature.**
+
+Track info (readonly): `trackTitle`, `trackArtist`, `trackAlbum`, `trackAlbumArtist`, `trackArtUrl`, `metadata` (raw map), `length` (sec), `uniqueId` (int), `dbusName`, `identity`, `desktopEntry`.
+
+State:
+| Property | Type | Description |
+|---|---|---|
+| `playbackState` | `MprisPlaybackState` | `Playing`/`Paused`/`Stopped` |
+| `isPlaying` | `bool` | shorthand setter (calls play/pause) |
+| `position` | `real` | seconds (millisecond precision); ⚠ NOT reactive — emit `positionChanged()` manually with a `FrameAnimation` or `Timer` if needed |
+| `volume` | `real` | 0.0–1.0 |
+| `loopState` | `MprisLoopState` | `None`/`Track`/`Playlist` |
+| `shuffle` | `bool` | |
+| `rate` / `minRate` / `maxRate` | `real` | playback speed |
+| `fullscreen` | `bool` | |
+
+Capabilities (readonly bools): `canControl`, `canPlay`, `canPause`, `canTogglePlaying`, `canSeek`, `canGoNext`, `canGoPrevious`, `canQuit`, `canRaise`, `canSetFullscreen`, `lengthSupported`, `positionSupported`, `volumeSupported`, `loopSupported`, `shuffleSupported`.
+
+| Function | Description |
+|---|---|
+| `play()` / `pause()` / `togglePlaying()` / `stop()` | |
+| `next()` / `previous()` | |
+| `seek(offset: real)` | relative seek |
+| `openUri(uri: string)` | request play of URI |
+| `raise()` / `quit()` | window-management |
+
+| Signal | |
+|---|---|
+| `trackChanged()` | new track; metadata updates *follow* this signal |
+| `postTrackChanged()` | metadata done updating (artUrl may still be late) |
+
+#### `MprisPlaybackState`, `MprisLoopState`
+Enums.
+
+---
+
+### `Quickshell.Services.Notifications`
+
+`import Quickshell.Services.Notifications`
+
+#### `NotificationServer`
+Implements the freedesktop notifications spec. **Most capability flags default to `false`** — you must opt in to advertise them.
+
+```qml
+NotificationServer {
+    id: nserver
+    bodySupported: true
+    actionsSupported: true
+    imageSupported: true
+    keepOnReload: true
+
+    onNotification: notif => {
+        notif.tracked = true       // call to keep the notification
+        // display logic...
+    }
+}
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `trackedNotifications` *(readonly)* | `ObjectModel<Notification>` | currently tracked |
+| `bodySupported` | `bool` | default true |
+| `bodyMarkupSupported` / `bodyHyperlinksSupported` / `bodyImagesSupported` | `bool` | default false |
+| `imageSupported` | `bool` | default false |
+| `actionsSupported` / `actionIconsSupported` | `bool` | default false |
+| `inlineReplySupported` | `bool` | default false |
+| `persistenceSupported` | `bool` | default false |
+| `keepOnReload` | `bool` | re-emit notifications across qs reloads (default true) |
+| `extraHints` | `list<string>` | |
+
+| Signal | |
+|---|---|
+| `notification(notification: Notification)` | new notification — set `notification.tracked = true` to keep |
+
+#### `Notification` *(uncreatable, retainable)*
+| Property | Type | Description |
+|---|---|---|
+| `id` *(readonly)* | `int` | server id |
+| `appName`, `appIcon`, `desktopEntry` *(readonly)* | `string` | sender |
+| `summary`, `body` *(readonly)* | `string` | title + body text |
+| `image` *(readonly)* | `string` | image (e.g. avatar) source |
+| `urgency` *(readonly)* | `NotificationUrgency` | `Low`/`Normal`/`Critical` |
+| `expireTimeout` *(readonly)* | `real` | seconds (0 = no timeout, -1 = default) |
+| `transient` *(readonly)* | `bool` | skip persistence |
+| `resident` *(readonly)* | `bool` | don't auto-close on action |
+| `lastGeneration` *(readonly)* | `bool` | from previous reload (if `keepOnReload`) |
+| `actions` *(readonly)* | `list<NotificationAction>` | |
+| `hasInlineReply` *(readonly)* | `bool` | |
+| `inlineReplyPlaceholder` *(readonly)* | `string` | |
+| `hasActionIcons` *(readonly)* | `bool` | |
+| `hints` *(readonly)* | `var` | raw map |
+| `tracked` | `bool` | set false to dismiss |
+
+| Function | |
+|---|---|
+| `dismiss()` | user-dismissed (calls server) |
+| `expire()` | timeout-expired (calls server) |
+| `sendInlineReply(text: string)` | only if `hasInlineReply` |
+
+| Signal | |
+|---|---|
+| `closed(reason: NotificationCloseReason)` | object destroyed after handlers exit |
+
+#### `NotificationAction`
+`identifier: string`, `text: string`, `invoke()` method.
+
+#### `NotificationUrgency`, `NotificationCloseReason`
+Enums.
+
+---
+
+### `Quickshell.Services.Pipewire`
+
+`import Quickshell.Services.Pipewire`
+
+#### `Pipewire` *(singleton)*
+| Property | Type | Description |
+|---|---|---|
+| `ready` *(readonly)* | `bool` | initial sync done |
+| `nodes` *(readonly)* | `ObjectModel<PwNode>` | every node |
+| `links` / `linkGroups` *(readonly)* | `ObjectModel<PwLink>` / `<PwLinkGroup>` | |
+| `defaultAudioSink` *(readonly)* | `PwNode` | currently chosen output |
+| `defaultAudioSource` *(readonly)* | `PwNode` | currently chosen input |
+| `preferredDefaultAudioSink` | `PwNode` | hint for default sink |
+| `preferredDefaultAudioSource` | `PwNode` | hint for default source |
+
+#### `PwNode` *(uncreatable)*
+| Property | Type | Description |
+|---|---|---|
+| `id` *(readonly)* | `int` | pipewire id |
+| `name`, `description`, `nickname` *(readonly)* | `string` | |
+| `type` *(readonly)* | `PwNodeType` | reflects `media.class` |
+| `isSink` / `isStream` *(readonly)* | `bool` | sink vs source / stream vs hardware |
+| `audio` *(readonly)* | `PwNodeAudio` | non-null iff audio node |
+| `properties` *(readonly)* | `var` | full property map (only valid if bound via `PwObjectTracker`) |
+| `ready` *(readonly)* | `bool` | |
+
+#### `PwNodeAudio` *(uncreatable)*
+Has `volume: real`, `muted: bool`, `channels: list<PwAudioChannel>`, `volumes: list<real>`, etc. Read/write to control device volume:
+
+```qml
+property var sink: Pipewire.defaultAudioSink
+PwObjectTracker { objects: [sink] }   // ensure properties bind
+Slider { value: sink?.audio.volume ?? 0; onMoved: sink.audio.volume = value }
+```
+
+#### `PwObjectTracker`
+Binds full property data of pipewire objects (otherwise `properties` is empty).
+
+#### `PwNodeLinkTracker`, `PwLink`, `PwLinkGroup`, `PwLinkState`, `PwAudioChannel`, `PwNodeType`
+Helpers for graph topology.
+
+---
+
+### `Quickshell.Services.UPower`
+
+`import Quickshell.Services.UPower`
+
+#### `UPower` *(singleton)*
+| Property | Type | Description |
+|---|---|---|
+| `devices` *(readonly)* | `ObjectModel<UPowerDevice>` | physical devices |
+| `displayDevice` *(readonly)* | `UPowerDevice` | aggregate display device (always exists; check `.ready`) |
+| `onBattery` *(readonly)* | `bool` | running on battery |
+
+#### `UPowerDevice` *(uncreatable)*
+| Property | Type | Description |
+|---|---|---|
+| `ready` *(readonly)* | `bool` | |
+| `type` *(readonly)* | `UPowerDeviceType` | `Battery`/`Mouse`/`Keyboard`/etc. |
+| `state` *(readonly)* | `UPowerDeviceState` | `Charging`/`Discharging`/`Empty`/`FullyCharged`/`PendingCharge`/`PendingDischarge` |
+| `percentage` *(readonly)* | `real` | 0–100 |
+| `energy` / `energyCapacity` *(readonly)* | `real` | watt-hours |
+| `changeRate` *(readonly)* | `real` | watts (positive=charging, negative=discharging) |
+| `timeToFull` / `timeToEmpty` *(readonly)* | `real` | seconds |
+| `healthSupported` / `healthPercentage` *(readonly)* | `bool`, `real` | |
+| `iconName` *(readonly)* | `string` | icon recommendation |
+| `model` / `nativePath` *(readonly)* | `string` | |
+| `isLaptopBattery` *(readonly)* | `bool` | shorthand |
+| `isPresent` *(readonly)* | `bool` | only valid if `type == Battery` |
+| `powerSupply` *(readonly)* | `bool` | provides charge to system |
+
+#### `PowerProfiles` *(singleton)*
+Read/control performance profiles.
+
+#### `PowerProfile`, `UPowerDeviceType`, `UPowerDeviceState`, `PerformanceDegradationReason`
+Enums.
+
+---
+
+### `Quickshell.Services.Pam`
+
+`import Quickshell.Services.Pam`
+
+#### `PamContext`
+Authenticate against PAM (use for lockscreens / greeters).
+
+```qml
+PamContext {
+    id: pam
+    config: "login"
+    user: "alice"
+    onPamMessage: passwordField.placeholder = message
+    onCompleted: result => {
+        if (result === PamResult.Success) lock.locked = false
+    }
+}
+// Start auth:
+pam.active = true
+// Respond to prompts:
+function submit() { pam.respond(passwordField.text) }
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `config` | `string` | name of PAM config file (default `"login"`) |
+| `configDirectory` | `string` | default `"/etc/pam.d"` |
+| `user` | `string` | empty = current user |
+| `active` | `bool` | start/stop auth — equivalent to `start()` / `abort()` |
+| `message` *(readonly)* | `string` | last PAM prompt |
+| `messageIsError` *(readonly)* | `bool` | |
+| `responseRequired` *(readonly)* | `bool` | call `respond()` |
+| `responseVisible` *(readonly)* | `bool` | echo response in clear text |
+
+| Function | |
+|---|---|
+| `start(): bool` | |
+| `abort()` | |
+| `respond(response: string)` | |
+
+| Signal | |
+|---|---|
+| `pamMessage()` | new prompt; check `message` etc. |
+| `completed(result: PamResult)` | success/failure (`Success`/`Failed`/`Error`) |
+| `error(error: PamError)` | |
+
+#### `PamResult`, `PamError`
+Enums.
+
+---
+
+### `Quickshell.Services.Greetd`
+
+`import Quickshell.Services.Greetd`
+
+#### `Greetd` *(singleton)*
+For implementing a greeter on top of `greetd`.
+
+| Property | Type | Description |
+|---|---|---|
+| `available` *(readonly)* | `bool` | greetd socket reachable |
+| `state` *(readonly)* | `GreetdState` | `Inactive`/`Authenticating`/`ReadyToLaunch`/`Launching` |
+| `user` *(readonly)* | `string` | current authenticating user |
+
+| Function | Description |
+|---|---|
+| `createSession(user: string)` | start auth flow |
+| `respond(response: string)` | answer auth message |
+| `cancelSession()` | cancel |
+| `launch(command: list)` / `launch(command, env)` / `launch(command, env, quit: bool)` | launch session — qs exits unless `quit == false` |
+
+| Signal | |
+|---|---|
+| `authMessage(message, error, responseRequired, echoResponse)` | recoverable prompt |
+| `authFailure(message: string)` | bad password etc. |
+| `readyToLaunch()` | |
+| `launched()` | greetd accepted session |
+| `error(error: string)` | |
+
+⚠ greetd expects greeter to **terminate ASAP** after `launch()`. Don't run animations after.
+
+---
+
+### `Quickshell.Widgets`
+
+`import Quickshell.Widgets`
+
+#### `IconImage` *(inherits `Item`)*
+A specialized `Image` for icons. Adds 1:1 aspect ratio padding.
+
+| Property | Type | Description |
+|---|---|---|
+| `source` | `string` | image URI |
+| `implicitSize` | `real` | suggested side length |
+| `actualSize` *(readonly)* | `real` | actually rendered size |
+| `mipmap` | `bool` | mipmap filter (default false) |
+| `asynchronous` | `bool` | (default false) |
+| `backer` | `Image` | underlying `Image` for advanced access |
+| `status` | `Image.Status` | |
+
+#### `WrapperItem` *(inherits `Item`)*
+Wraps a single child with margins.
+
+#### `WrapperRectangle` *(inherits `Rectangle`)*
+Wraps a single child with margins **and** a `Rectangle` background/border.
+
+| Property | Type | Description |
+|---|---|---|
+| `child` | `Item` | the wrapped item (auto-detected, or set explicitly) |
+| `margin` | `real` | default for all 4 sides |
+| `topMargin` / `bottomMargin` / `leftMargin` / `rightMargin` | `real` | per-side; default `margin`; assign `undefined` to reset |
+| `extraMargin` | `real` | added on top of all sides |
+| `contentInsideBorder` | `bool` | add `border.width` to `extraMargin` (default true) |
+| `resizeChild` | `bool` | stretch child if wrapper is larger than its implicit size (default true) |
+| `implicitWidth` / `implicitHeight` | `real` | overrides; assign `undefined` to reset |
+
+⚠ Don't set `child.x`/`y`/`width`/`height`/`anchors` — those are managed.
+
+#### `WrapperMouseArea` *(inherits `MouseArea`)*
+Same idea, but the wrapper is a `MouseArea`.
+
+#### `ClippingRectangle` *(inherits `Rectangle`)*
+A `Rectangle` that clips its children to its rounded shape.
+
+#### `ClippingWrapperRectangle`
+Combines `WrapperRectangle` + clipping (so e.g. `IconImage` inside is rounded).
+
+```qml
+ClippingWrapperRectangle {
+    radius: 10
+    IconImage { source: "..."; implicitSize: 48 }
+}
+```
+
+#### `MarginWrapperManager` *(attached helper)*
+Inside any `Item` you can drop `MarginWrapperManager { margin: 5 }` to make it a margin-wrapper around its single child.
+
+#### `WrapperManager` / `WrapperItem`
+Lower-level managers; `MarginWrapperManager` is built on `WrapperManager`.
+
+---
+
+### `Quickshell.DBusMenu` / `Quickshell.Bluetooth`
+
+#### `Quickshell.DBusMenu`
+- `DBusMenuHandle` — handle to a menu (returned from system tray items).
+- `DBusMenuItem` — entry; iterate via `QsMenuOpener`.
+
+#### `Quickshell.Bluetooth`
+- `Bluetooth` *(singleton)* — `adapters: ObjectModel<BluetoothAdapter>`, `defaultAdapter`.
+- `BluetoothAdapter` — `enabled`, `discovering`, `discoverable`, `pairable`, `name`, `address`, `state: BluetoothAdapterState`, `devices: ObjectModel<BluetoothDevice>`. Methods: `setEnabled()`, `setDiscovering()`, …
+- `BluetoothDevice` — `name`, `address`, `paired`, `connected`, `bonded`, `trusted`, `blocked`, `batteryAvailable`, `battery`, `state: BluetoothDeviceState`, `icon`, …. Methods: `pair()`, `connect()`, `disconnect()`, `forget()`.
+- `BluetoothAdapterState`, `BluetoothDeviceState` — enums.
+
+---
+
+## Common Patterns / Recipes
+
+### A basic per-screen bar
+
+```qml
+// shell.qml
+import Quickshell
+import Quickshell.Io
+import QtQuick
+import QtQuick.Layouts
+
+Scope {
+    Variants {
+        model: Quickshell.screens
+        PanelWindow {
+            required property var modelData
+            screen: modelData
+
+            anchors { top: true; left: true; right: true }
+            implicitHeight: 32
+            color: "#1e1e2e"
+            exclusiveZone: implicitHeight
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 4
+                Text { text: Time.text; color: "white" }
+                Item { Layout.fillWidth: true }       // spacer
+                Text { text: "right"; color: "white" }
+            }
+        }
+    }
+}
+```
+
+### A clock singleton
+
+```qml
+// Time.qml
+pragma Singleton
+import Quickshell
+import QtQuick
+Singleton {
+    readonly property string text: Qt.formatDateTime(clock.date, "HH:mm:ss")
+    SystemClock { id: clock; precision: SystemClock.Seconds }
+}
+```
+
+Then in any other QML: `Text { text: Time.text }` (auto-imported as a sibling).
+
+### Reading once-off process output
+
+```qml
+Process {
+    command: ["uname", "-r"]
+    running: true
+    stdout: StdioCollector {
+        onStreamFinished: kernel.text = this.text.trim()
+    }
+}
+Text { id: kernel }
+```
+
+### Streaming a long-running process
+
+```qml
+// Listen to Hyprland events
+Process {
+    command: ["socat", "-U", "-", "UNIX-CONNECT:" + Hyprland.eventSocketPath]
+    running: true
+    stdout: SplitParser {
+        splitMarker: "\n"
+        onRead: line => console.log("evt:", line)
+    }
+}
+```
+
+…or just use `Hyprland.rawEvent`.
+
+### Periodic refresh
+
+```qml
+Timer {
+    interval: 5000
+    running: true
+    repeat: true
+    onTriggered: cpuProc.running = true
+}
+Process {
+    id: cpuProc
+    command: ["sh", "-c", "echo $(cat /proc/loadavg | cut -d' ' -f1)"]
+    stdout: StdioCollector { onStreamFinished: cpuLabel.text = this.text }
+}
+```
+
+### File watching
+
+```qml
+FileView {
+    path: "/sys/class/backlight/intel_backlight/brightness"
+    watchChanges: true
+    onFileChanged: this.reload()
+    onLoaded: brightnessLabel.text = text().trim()
+}
+```
+
+### Popup attached to a bar item
+
+```qml
+PanelWindow {
+    id: bar
+    anchors { top: true; left: true; right: true }
+    implicitHeight: 32
+
+    Rectangle {
+        id: button
+        width: 80; height: parent.height
+        color: ma.containsMouse ? "#444" : "transparent"
+        Text { anchors.centerIn: parent; text: "Menu"; color: "white" }
+        MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true; onClicked: pop.visible = !pop.visible }
+    }
+
+    PopupWindow {
+        id: pop
+        anchor.window: bar
+        anchor.item: button
+        anchor.rect.y: button.height
+        width: 200; height: 200
+        visible: false
+        Rectangle { anchors.fill: parent; color: "#222" }
+    }
+}
+```
+
+### System tray rendering
+
+```qml
+import Quickshell.Services.SystemTray
+import Quickshell.Widgets
+import QtQuick.Layouts
+
+RowLayout {
+    Repeater {
+        model: SystemTray.items
+        delegate: MouseArea {
+            required property SystemTrayItem modelData
+            implicitWidth: 24; implicitHeight: 24
+            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+            onClicked: mouse => {
+                if (mouse.button === Qt.LeftButton) modelData.activate()
+                else if (mouse.button === Qt.MiddleButton) modelData.secondaryActivate()
+                else if (modelData.hasMenu) modelData.display(QsWindow.window, mouse.x, mouse.y)
+            }
+            onWheel: wheel => modelData.scroll(wheel.angleDelta.y, false)
+            IconImage {
+                anchors.fill: parent
+                source: modelData.icon
+            }
+        }
+    }
+}
+```
+
+### Mpris media controls
+
+```qml
+import Quickshell.Services.Mpris
+
+Repeater {
+    model: Mpris.players
+    delegate: RowLayout {
+        required property MprisPlayer modelData
+        Text { text: modelData.trackTitle || "—" }
+        Button {
+            text: modelData.isPlaying ? "⏸" : "▶"
+            enabled: modelData.canTogglePlaying
+            onClicked: modelData.togglePlaying()
+        }
+        Slider {
+            from: 0; to: modelData.length || 1
+            value: modelData.position
+            onMoved: if (modelData.canSeek) modelData.position = value
+        }
+        FrameAnimation {
+            running: modelData.playbackState === MprisPlaybackState.Playing
+            onTriggered: modelData.positionChanged()  // force reactive update
+        }
+    }
+}
+```
+
+### Hyprland workspaces widget
+
+```qml
+import Quickshell.Hyprland
+import QtQuick.Layouts
+
+RowLayout {
+    Repeater {
+        model: Hyprland.workspaces
+        delegate: Rectangle {
+            required property HyprlandWorkspace modelData
+            implicitWidth: 24; implicitHeight: 24
+            radius: 4
+            color: modelData.focused ? "#89b4fa"
+                 : modelData.active  ? "#45475a"
+                 : modelData.urgent  ? "#f38ba8"
+                 : "transparent"
+            border.color: "#585b70"
+            Text {
+                anchors.centerIn: parent
+                text: modelData.name
+                color: "white"
+            }
+            MouseArea { anchors.fill: parent; onClicked: modelData.activate() }
+        }
+    }
+}
+```
+
+### Notification daemon (minimal)
+
+```qml
+import Quickshell.Services.Notifications
+import QtQuick.Layouts
+
+NotificationServer {
+    id: server
+    bodySupported: true
+    bodyMarkupSupported: true
+    actionsSupported: true
+    imageSupported: true
+    onNotification: n => { n.tracked = true }
+}
+
+PanelWindow {
+    anchors { top: true; right: true }
+    implicitWidth: 360; implicitHeight: contentColumn.height + 16
+    color: "transparent"
+    ColumnLayout {
+        id: contentColumn
+        anchors.right: parent.right
+        spacing: 4
+        Repeater {
+            model: server.trackedNotifications
+            delegate: Rectangle {
+                required property Notification modelData
+                Layout.preferredWidth: 350
+                implicitHeight: title.height + body.height + 16
+                radius: 8
+                color: "#1e1e2e"
+                border.color: "#585b70"
+                Text { id: title; text: modelData.summary; color: "white"; x: 8; y: 8 }
+                Text { id: body; text: modelData.body; color: "#cdd6f4"; x: 8; anchors.top: title.bottom; wrapMode: Text.Wrap; width: parent.width - 16 }
+                Timer { interval: 5000; running: true; onTriggered: modelData.expire() }
+            }
+        }
+    }
+}
+```
+
+### Lockscreen with PAM
+
+**Quickstart** — single-screen, minimum viable:
+
+```qml
+import Quickshell.Wayland
+import Quickshell.Services.Pam
+import QtQuick
+import QtQuick.Controls
+
+WlSessionLock {
+    id: lock
+    locked: true
+
+    PamContext {
+        id: pam
+        onCompleted: result => {
+            if (result === PamResult.Success) lock.locked = false
+            else { passField.text = ""; passField.placeholderText = "Wrong password" }
+        }
+    }
+
+    WlSessionLockSurface {
+        Rectangle {
+            anchors.fill: parent
+            color: "black"
+            TextField {
+                id: passField
+                anchors.centerIn: parent
+                width: 300
+                echoMode: TextInput.Password
+                placeholderText: pam.message || "Password"
+                onAccepted: {
+                    if (!pam.active) pam.active = true
+                    else if (pam.responseRequired) pam.respond(text)
+                }
+            }
+        }
+    }
+}
+```
+
+**Production-grade pattern.** The quickstart loses the error message instantly (gotcha #49), looks frozen during PAM's 2 s validation (gotcha #50), and only handles a single screen. A robust lock has four layers:
+
+1. **Service singleton** (`LockService.qml`) — owns lock state, PAM, error/checking flags. Survives hot-reload and is shared across all surfaces.
+2. **Lock root** (`Lock.qml`) — `WlSessionLock { surface: Component { LockSurface { } } }`. One instance, fans out per-screen via Component (gotcha #48).
+3. **LockSurface** (`LockSurface.qml`) — per-screen UI: background + clock + password input. Disables itself while `LockService.pamChecking` is true.
+4. **IPC trigger** — `IpcHandler { target: "lock"; function open(): void { LockService.lock() } }` so compositor keybinds and systemd units trigger lock via `qs ipc call lock open`. (This shell's *idle* lock no longer goes through IPC — `qs.system`'s `IdleService` calls `LockService.lock()` directly off `IdleMonitor`. See gotcha #52.)
+
+```qml
+// LockService.qml — singleton
+pragma Singleton
+import QtQuick
+import Quickshell
+import Quickshell.Services.Pam
+
+Singleton {
+    id: root
+    property bool   locked:       false
+    property string pamMessage:   ""
+    property string pamError:     ""    // persistent — cleared only on respond() or success
+    property bool   pamChecking:  false  // true while pam_unix is validating (~2 s)
+    property string _pendingResponse: ""  // queue for early submits (lock-open race)
+
+    function lock() {
+        if (root.locked) return                  // idempotent — idle + IPC may both call
+        root.pamError = ""
+        root.locked = true
+        if (!pam.active) pam.active = true
+    }
+
+    function respond(text) {
+        if (!pam.active)              { root._pendingResponse = text; pam.active = true; return }
+        if (pam.responseRequired)     { root.pamError = ""; root.pamChecking = true; pam.respond(text) }
+        else                          { root._pendingResponse = text }   // surface should disable input; defensive
+    }
+
+    PamContext {
+        id: pam
+        config: "qslock"                          // /etc/pam.d/qslock = "auth include login"
+        onMessageChanged: root.pamMessage = pam.message || ""
+                                                 // do NOT clear pamError here — see gotcha #49
+        onResponseRequiredChanged: {
+            if (pam.responseRequired && root._pendingResponse.length > 0) {
+                const t = root._pendingResponse
+                root._pendingResponse = ""
+                root.pamError = ""
+                root.pamChecking = true
+                pam.respond(t)
+            }
+        }
+        onCompleted: result => {
+            root.pamChecking = false
+            if (result === PamResult.Success)    { root.locked = false; root.pamError = ""; root.pamMessage = "" }
+            else if (result === PamResult.Failed) { root.pamError = "Authentication failed"
+                                                    Qt.callLater(() => { if (root.locked) pam.active = true }) }
+            else                                  { root.pamError = "PAM error — try again"
+                                                    Qt.callLater(() => { if (root.locked) pam.active = true }) }
+        }
+    }
+}
+```
+
+```qml
+// LockSurface.qml — per-screen UI
+import QtQuick
+import QtQuick.Effects
+import Quickshell.Wayland
+
+WlSessionLockSurface {
+    color: "black"
+
+    // Optional blurred wallpaper background (see gotcha #51 for layer.enabled).
+    // Read the path from somewhere — e.g. ~/.config/waypaper/config.ini (gotcha #53).
+    Image {
+        anchors.fill: parent
+        source: LockService.wallpaperPath
+        fillMode: Image.PreserveAspectCrop
+        sourceSize.width: parent.width; sourceSize.height: parent.height
+        layer.enabled: true
+        layer.effect: MultiEffect { blurEnabled: true; blur: 1.0; blurMax: 64 }
+    }
+    Rectangle { anchors.fill: parent; color: "#16181c"; opacity: 0.45 }   // dark overlay
+
+    // Centered clock + input.
+    Column {
+        anchors.centerIn: parent; spacing: 18; width: 360
+
+        SystemClock { id: clk; precision: SystemClock.Minutes }
+        Text { anchors.horizontalCenter: parent.horizontalCenter
+               text: Qt.formatDateTime(clk.date, "HH:mm")
+               color: "white"; font.pixelSize: 96; font.family: "monospace" }
+
+        Rectangle {
+            width: parent.width; height: 44; radius: 4
+            color: Qt.rgba(0, 0, 0, 0.55)
+            opacity: LockService.pamChecking ? 0.45 : 1.0     // dim while validating
+            Behavior on opacity { NumberAnimation { duration: 100 } }
+            border.width: 1
+            border.color: LockService.pamError.length > 0 ? "#ff5050"
+                        : (passField.activeFocus ? "white" : "#2a2a2e")
+
+            TextInput {
+                id: passField
+                anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
+                verticalAlignment: TextInput.AlignVCenter
+                color: "white"; font.pixelSize: 16
+                echoMode: TextInput.Password; passwordCharacter: "●"
+                readOnly: LockService.pamChecking            // input locked during the 2 s wait
+                Component.onCompleted: forceActiveFocus()
+                Keys.onPressed: event => {
+                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && !LockService.pamChecking && passField.text.length > 0) {
+                        LockService.respond(passField.text)
+                        // do NOT clear field here — let dots stay visible; clear on error
+                        event.accepted = true
+                    }
+                }
+            }
+        }
+
+        Text { anchors.horizontalCenter: parent.horizontalCenter
+               text: LockService.pamError.length > 0 ? LockService.pamError
+                                                     : (LockService.pamMessage || "Locked")
+               color: LockService.pamError.length > 0 ? "#ff7070" : "white"
+               font.pixelSize: 12 }
+    }
+
+    // On rejected attempt: clear the field so the user can immediately retype.
+    Connections {
+        target: LockService
+        function onPamErrorChanged() {
+            if (LockService.pamError.length > 0) {
+                passField.text = ""
+                Qt.callLater(() => passField.forceActiveFocus())
+            }
+        }
+    }
+}
+```
+
+**PAM service file** (`/etc/pam.d/qslock`, root install):
+
+```
+auth include login
+```
+
+(Or, for instant feedback at the cost of fail-rate-limiting, `auth required pam_unix.so nodelay` — see gotcha #50.)
+
+**Recovery if your shell crashes while locked.** `WlSessionLock` is secure-by-design (see gotcha at `WlSessionLock` API): if Quickshell dies while locked, the screen STAYS locked. Your unlock path is:
+
+```
+Ctrl+Alt+F2          # switch to TTY 2
+<login as your user>
+loginctl unlock-session $XDG_SESSION_ID
+Ctrl+Alt+F1          # back to your graphical session
+```
+
+Test this rehearsal before you ever need it.
+
+### Application launcher (fuzzy)
+
+```qml
+import Quickshell
+
+ListView {
+    model: search.length > 0
+        ? DesktopEntries.applications.values.filter(a =>
+            a.name.toLowerCase().includes(search.toLowerCase()))
+        : DesktopEntries.applications.values
+    delegate: MouseArea {
+        required property DesktopEntry modelData
+        width: parent.width; height: 32
+        onClicked: { modelData.execute(); root.visible = false }
+        Row {
+            spacing: 8
+            IconImage { source: Quickshell.iconPath(modelData.icon, true); implicitSize: 24 }
+            Text { text: modelData.name; color: "white"; anchors.verticalCenter: parent.verticalCenter }
+        }
+    }
+}
+```
+
+### Compositor integration without a built-in module (e.g. Niri, river, Wayfire)
+
+For compositors that ship a JSON event stream but don't have a dedicated `Quickshell.<compositor>` module, build a service object around a long-running `Process` + `SplitParser`. Pattern from a working niri backend:
+
+```qml
+// BackendNiri.qml — QtObject with a child Process so it can hold IPC state
+import QtQuick
+import Quickshell
+import Quickshell.Io
+
+QtObject {
+    id: root
+
+    property var workspaces: []
+    property string focusedOutput: ""
+
+    function _handleEvent(event) {
+        if (event.WorkspacesChanged) {
+            root.workspaces = event.WorkspacesChanged.workspaces;
+            const focused = root.workspaces.find(w => w.is_focused);
+            if (focused) root.focusedOutput = focused.output;
+        } else if (event.WorkspaceActivated) {
+            const id = event.WorkspaceActivated.id;
+            const focused = event.WorkspaceActivated.focused;
+            root.workspaces = root.workspaces.map(w => Object.assign({}, w, {
+                is_active:  w.output === root.workspaces.find(x => x.id === id)?.output
+                            ? (w.id === id) : w.is_active,
+                is_focused: focused ? (w.id === id) : w.is_focused,
+            }));
+            if (focused) root.focusedOutput = root.workspaces.find(w => w.id === id)?.output ?? "";
+        }
+    }
+
+    property Process _events: Process {
+        command: ["niri", "msg", "--json", "event-stream"]
+        running: true
+        stdout: SplitParser {
+            splitMarker: "\n"
+            onRead: line => {
+                if (!line) return;
+                try { root._handleEvent(JSON.parse(line)); }
+                catch (e) { console.warn("[BackendNiri] parse:", e, line); }
+            }
+        }
+        // Auto-restart on compositor restart
+        onRunningChanged: { if (!running) running = true; }
+    }
+}
+```
+
+For a multi-compositor shell that needs to support niri AND `Quickshell.Hyprland`-style targets (Hyprland, Sway / i3 via `Quickshell.I3`), wrap this kind of backend behind a singleton facade with a `Loader { sourceComponent }` selecting the matching backend at startup based on env vars (`$HYPRLAND_INSTANCE_SIGNATURE`, `$SWAYSOCK`, `$NIRI_SOCKET`, `$XDG_CURRENT_DESKTOP`). See **gotcha #59** for the full pattern.
+
+### Custom icons drawn with QtQuick.Shapes
+
+Theme icons aren't always available, render dark, or simply don't fit the visual language. For small symbolic glyphs, draw inline:
+
+```qml
+import QtQuick
+import QtQuick.Shapes
+
+Item {
+    id: bell
+    width: 14; height: 14
+    readonly property color stroke: Theme.text
+
+    Shape {
+        anchors.fill: parent
+        antialiasing: true
+        layer.enabled: true
+        layer.samples: 4   // 4x MSAA — required for crisp curves at 14-16px
+
+        // Bell body (rounded path with quadratic curves)
+        ShapePath {
+            strokeColor: bell.stroke
+            strokeWidth: 1.4
+            fillColor: "transparent"
+            capStyle: ShapePath.RoundCap
+            joinStyle: ShapePath.RoundJoin
+
+            startX: 2; startY: 11
+            PathQuad { x: 7; y: 2; controlX: 1; controlY: 6 }
+            PathQuad { x: 12; y: 11; controlX: 13; controlY: 6 }
+            PathLine { x: 2; y: 11 }
+        }
+    }
+}
+```
+
+Notes:
+- `layer.enabled: true; layer.samples: 4` is essential — without MSAA, curves look jagged at small sizes.
+- `ShapePath` lives inside `Shape`. Inside `ShapePath`, `parent.parent` doesn't resolve to the wrapping Item — assign `id: bell` and reference directly.
+- Each `Shape` block can hold multiple `ShapePath`s (cup body + handle + steam are 3 paths in one Shape).
+- For a rotating element (gauge needle, spinner), apply `transform: Rotation { origin.x:...; origin.y:...; angle: bell.someAngle }` to a child Rectangle and animate `someAngle` with a `Behavior on someAngle`.
+
+### Project organization with subdirectory modules
+
+For configs beyond ~10 files, group by feature. Each subdir auto-registers as a Quickshell module (no `qmldir`):
+
+```
+shell-root/
+├── shell.qml                ← entry; sees siblings + must `import qs.<subdir>` for subdirs
+├── Theme.qml                ← root-level singleton (auto-import to root files only)
+├── Bar.qml                  ← root-level chrome
+│
+├── workspaces/Workspaces.qml, Niri.qml
+├── volume/Volume.qml, VolumePopup.qml
+├── network/Network.qml, NetworkPopup.qml, NetworkService.qml      ← service is a sibling
+└── notifications/Notifications.qml, NotificationService.qml, ...
+```
+
+Imports:
+- `shell.qml` and `Bar.qml` (root): `import qs.workspaces`, `import qs.volume`, etc., one per consumed subdir.
+- Files inside each subdir: `import qs` (gives access to root-level singletons like `Theme`).
+- Within a subdir: no imports needed — files are siblings.
+
+```qml
+// Bar.qml
+import QtQuick
+import Quickshell
+import qs.workspaces
+import qs.volume
+import qs.network
+// ...
+
+PanelWindow { /* uses Workspaces, Volume, Network types */ }
+```
+
+```qml
+// network/Network.qml
+import QtQuick
+import Quickshell
+import qs                          // for Theme
+
+MouseArea { Rectangle { color: Theme.bg } /* uses NetworkService (sibling) */ }
+```
+
+### Save state across reloads
+
+```qml
+PersistentProperties {
+    id: state
+    reloadableId: "appState"
+    property bool sidebarExpanded: false
+    property real volume: 0.5
+}
+```
+
+### IPC remote control
+
+```qml
+import Quickshell.Io
+
+PanelWindow {
+    id: bar
+    visible: true
+    IpcHandler {
+        target: "bar"
+        function show(): void   { bar.visible = true }
+        function hide(): void   { bar.visible = false }
+        function toggle(): void { bar.visible = !bar.visible }
+        function getVisible(): bool { return bar.visible }
+    }
+}
+```
+
+```bash
+qs ipc call bar toggle
+qs ipc call bar show
+qs ipc call bar getVisible    # → true
+```
+
+### Detached process launch
+
+```qml
+Button {
+    text: "Open Firefox"
+    onClicked: Quickshell.execDetached(["firefox"])
+}
+
+// or with full env
+Quickshell.execDetached({
+    command: ["myapp", "--flag"],
+    workingDirectory: "/tmp",
+    environment: { DISPLAY: ":0", PATH: null /* removes */ }
+})
+```
+
+### Rounded transparent window
+
+```qml
+PanelWindow {
+    color: "transparent"
+    surfaceFormat.opaque: false           // only needed if going transparent later
+    Rectangle {
+        anchors.fill: parent
+        radius: 10
+        color: "#cc1e1e2e"
+        border.width: 0                    // workaround for QTBUG-137166
+    }
+}
+```
+
+### Pipewire volume control
+
+```qml
+import Quickshell.Services.Pipewire
+
+PwObjectTracker { objects: [Pipewire.defaultAudioSink] }
+
+Slider {
+    enabled: Pipewire.defaultAudioSink?.audio
+    from: 0; to: 1
+    value: Pipewire.defaultAudioSink?.audio?.volume ?? 0
+    onMoved: Pipewire.defaultAudioSink.audio.volume = value
+}
+Button {
+    text: Pipewire.defaultAudioSink?.audio?.muted ? "🔇" : "🔊"
+    onClicked: Pipewire.defaultAudioSink.audio.muted = !Pipewire.defaultAudioSink.audio.muted
+}
+```
+
+### Battery widget
+
+```qml
+import Quickshell.Services.UPower
+
+Text {
+    visible: UPower.displayDevice.ready
+    text: {
+        const d = UPower.displayDevice
+        const pct = Math.round(d.percentage)
+        const charging = d.state === UPowerDeviceState.Charging
+        return (charging ? "⚡ " : "🔋 ") + pct + "%"
+    }
+}
+```
+
+---
+
+## Tips for AI Agents
+
+### Conventions & gotchas
+
+1. **Always set `anchors` *before* properties that depend on the resulting size.** For `PanelWindow`, you usually want `anchors { top: true; left: true; right: true }` *and* `implicitHeight`.
+2. **`PanelWindow.exclusiveZone` requires 1 or 3 anchors.** With both top *and* bottom anchored, the zone has no effect.
+3. **When using `Variants`, declare `required property var modelData`.** Forgetting this gives a warning and the property isn't injected.
+4. **Inside a `Variants` over `Quickshell.screens`, set `screen: modelData`.** Otherwise the window won't reliably go to the intended monitor.
+5. **Don't access ids defined inside `Variants` from outside.** Use a `Singleton` or a property on the root `Scope` for shared state.
+6. **Don't set `width`/`height`/`x`/`y`/`anchors` on the child of a `WrapperItem`/`WrapperRectangle`.** It's managed; set `implicitWidth`/`implicitHeight` instead.
+7. **Use `RowLayout`/`ColumnLayout` over `Row`/`Column`.** Layouts pixel-align, preventing fractional offsets that blur subsequent items.
+8. **`childrenRect` ⇒ binding loop.** Don't size a parent to it; use `implicitWidth`/`implicitHeight` of the child or a wrapper component.
+9. **Type your `IpcHandler` functions.** `function foo(x: int): void {}` — without annotations, the function isn't registered.
+10. **Hot reload preserves windows by `reloadableId`.** Set it on long-lived windows you want reused.
+11. **Most service capability flags default to `false`.** `NotificationServer.actionsSupported` etc. must be opted into.
+12. **`MprisPlayer.position` is NOT reactive on its own.** Drive a `FrameAnimation`/`Timer` that emits `positionChanged()` while playing.
+13. **`process.running = true` while already running does nothing.** Toggle via `onRunningChanged: if (!running) running = true` to restart after exit.
+14. **`Process.command` does not run via shell.** `["echo hello"]` won't work; use `["echo", "hello"]` or `["sh", "-c", "echo hello"]`.
+15. **`Quickshell.iconPath(name, true)` returns empty string if missing.** Use this variant to avoid the purple/black "missing icon" square.
+16. **`Quickshell.clipboardText` on Wayland is empty unless a qs window is focused.** Listen via change signal once focused.
+17. **Singletons must use `pragma Singleton` AND root with `Singleton {}` type.** Without `pragma`, it's a normal type.
+18. **Implicit imports**: any UpperCase neighboring `.qml` file is auto-importable. `qs.path.to.module` (v0.2+) is preferred over `"path/to/module"` for LSP-friendliness.
+19. **Don't use root-imports (`import "root:/..."`)** — they break the LSP and singletons. Use `qs.foo.bar`.
+20. **`.qmlls.ini`**: leave as an empty file next to `shell.qml`; Quickshell rewrites it. Gitignore it.
+21. **`LazyLoader` doesn't start loading until a window has been created.** If your entire shell is in lazy loaders, nothing loads.
+22. **Reading `LazyLoader.item` while it's loading blocks the UI thread.** Use the `activeAsync` + `activeChanged` signal pattern instead.
+23. **`WlSessionLock`'s session lock is *secure* by design**: if your config crashes, the screen stays locked and inoperable. Test carefully.
+24. **`PopupAnchor.item` snapshot**: if the anchor item moves, popup won't follow. Call `anchor.updateAnchor()` or anchor to the window with custom logic in the `anchoring` signal.
+25. **`Notification` is `Retainable`**: to animate-out, wrap it in a `RetainableLock { object: notif; locked: true }`.
+
+### Hard-won gotchas (project-tested in v0.2.1)
+
+These are non-obvious failures that cost real debugging time and aren't surfaced clearly elsewhere.
+
+26. **Property names starting with `on` collide with QML's signal-handler syntax.** A property called `onAccent` parses as a (non-existent) signal handler for an `accent` signal and produces:
+    > `Cannot assign a value to a signal (expecting a script to be run)`
+
+    Rename to `accentText` / `onAccentColor` / etc. — anything that doesn't start with `on` followed by a word boundary.
+
+27. **`required property X` whose name matches an `id` in the parent scope shadows the id at binding time.**
+
+    ```qml
+    // shell.qml
+    Service  { id: service }                // some service instance
+    Bar      { service: service }           // ← right-hand `service` resolves to Bar's
+                                            //   own (uninitialized) property, not the id.
+    ```
+
+    Symptom: `TypeError: Cannot read property 'foo' of undefined` from inside `Bar.qml`. Disambiguate by renaming either the id (`serviceInstance`) or the property. Avoiding this kind of pass-through entirely (use a singleton instead) sidesteps the whole class of bug.
+
+28. **Inline self-referential `Component` is rejected at parse time.** This fails:
+
+    ```qml
+    // TrayMenu.qml
+    Component { id: subComp; TrayMenu {} } // → "TrayMenu is instantiated recursively"
+    ```
+
+    Use `Qt.createComponent("TrayMenu.qml")` for runtime resolution if a type needs to spawn instances of itself (recursive submenus, tree views, etc.).
+
+29. **`PopupAnchor::setItem(nullptr)` crashes Quickshell when an item was previously set.** In v0.2.1 (and master) the internal `onItemWindowChanged` slot dereferences `mItem` after it's been nulled:
+
+    ```cpp
+    void PopupAnchor::setItem(QQuickItem* item) {
+        ...
+        this->mItem = item;            // can be nullptr
+        this->onItemWindowChanged();   // calls mItem->window() → SIGSEGV
+    }
+    ```
+
+    Workaround: **never explicitly assign `null` to a popup's `anchor.item`** while it currently holds a valid item. Hide via `visible: false` instead. Natural destruction of the anchor item (the `destroyed` signal path) is handled correctly.
+
+30. **Don't mutate popup state during event delivery — use `Qt.callLater`.** Tearing down a popup (or clearing references that propagate to a popup's `anchor.item`) inside a `MouseArea` `onClicked` can crash via Quickshell's PopupAnchor reading items mid-destruction. Wrap the teardown:
+
+    ```qml
+    onClicked: Qt.callLater(() => {
+        trayMenu.closeSubmenus();
+        root.activeItem = null;
+    })
+    ```
+
+    The click event finishes propagating cleanly before any destruction.
+
+31. **`IconImage.source` does NOT auto-resolve theme icon names.** Passing `"audio-volume-high-symbolic"` is interpreted as a relative file path under the QML import dir and fails. Always wrap:
+
+    ```qml
+    IconImage { source: Quickshell.iconPath("audio-volume-high-symbolic", true) }
+    ```
+
+32. **`IconImage`'s broken-image placeholder leaks through `visible: status === Image.Ready`.** A "random checkerboard grid" briefly renders before status changes. Wrap the IconImage in an `Item` gated on the source string itself:
+
+    ```qml
+    Item {                                  // gate at the wrapper, not the IconImage
+        width: src !== "" ? 14 : 0
+        height: 14
+        visible: src !== ""
+        IconImage { anchors.fill: parent; source: src; asynchronous: false }
+    }
+    ```
+
+33. **`asynchronous: true` on small icons risks a SIGSEGV with thread-safety races.** The async `QQuickPixmapReader` thread can deliver to a destroyed parent Item. For ≤48px icons (tray, notifications, menu entries) prefer `asynchronous: false`.
+
+34. **`Behavior` on a `readonly property` is rejected.** ("Invalid property assignment: ... is a read-only property"). Apply the `Behavior` on the consumer (the actual property being animated), not on the readonly source:
+
+    ```qml
+    readonly property color stroke: active ? Theme.accent : Theme.text
+    Rectangle { color: parent.stroke; Behavior on color { ColorAnimation {} } }
+    ```
+
+35. **`pragma Singleton` only auto-imports to siblings.** A singleton at the root of the qs namespace is auto-available to other root files but **NOT** to files in subdirectories. Subdir files need `import qs` (for root-level singletons) or `import qs.<subdir>` (for singletons in another subdir).
+
+36. **Each subdirectory of the shell automatically becomes a Quickshell module.** No `qmldir` files needed. `import qs.foo` exposes everything in `<shell>/foo/`. Within a single subdir, files are siblings to each other and need no internal imports.
+
+37. **`Repeater.model` bound to a function call doesn't always track inner property reads.** Read a model's `.values` directly inside the binding to be safe:
+
+    ```qml
+    Repeater {
+        model: {
+            const ids = NotificationService.popupIds;     // touch the dependency
+            return NotificationService.trackedNotifications.values
+                .filter(n => ids.indexOf(n.id) >= 0);
+        }
+    }
+    ```
+
+38. **Singletons are lazy.** A `pragma Singleton` file containing a long-running `Process { running: true }` won't actually start the process until the singleton is referenced from another file. Reading any property triggers initialization.
+
+39. **`ObjectModel<T>` cleanup signals are signals on the model, not on items.** Connect via `Connections`:
+
+    ```qml
+    Connections {
+        target: server.trackedNotifications
+        function onObjectRemovedPost(obj, index) { /* purge id from auxiliary maps */ }
+    }
+    ```
+
+### Compositor / system gotchas
+
+40. **NetworkManager auto-deletes ad-hoc `Wired connection N` profiles on `nmcli connection down`.** Use `nmcli device disconnect <device>` instead, and `nmcli device connect <device>` to reactivate. Device-level commands don't touch the underlying profile.
+
+41. **StatusNotifierItem icon path extension `name?path=<dir>` is not auto-resolved by Quickshell** in v0.2.1 (logs `Searching custom icon paths is not yet supported`). You'll see the warning for Steam tray icons specifically. Manually parse the URL and build a `file://...` path:
+
+    ```js
+    function resolveTrayIcon(s) {
+        if (!s || s.indexOf("?path=") < 0) return s;
+        let name = s.substring(0, s.indexOf("?"));
+        if (name.startsWith("image://icon/")) name = name.substring(13);
+        const path = decodeURIComponent(s.substring(s.indexOf("?path=") + 6));
+        return "file://" + path + "/" + name + ".png";
+    }
+    ```
+
+42. **Adwaita symbolic SVGs hardcode `fill="#222222"`**, NOT `currentColor`. They render dark on dark themes via Qt's SVG renderer. breeze-dark icons use `fill="currentColor"` + a CSS `.ColorScheme-Text { color: #fcfcfc }` and DO render in the right color. If you need an Adwaita-only icon in a dark bar, copy the SVG locally and replace the fill with `#fcfcfc`.
+
+43. **Only one daemon can own `org.freedesktop.Notifications` on D-Bus.** If swaync/dunst/mako is running, Quickshell's `NotificationServer` will log:
+
+    > `Could not register notification server at org.freedesktop.Notifications, presumably because one is already registered.`
+
+    `pkill swaync` (etc.) and Quickshell will auto-claim the name on the next D-Bus owner change.
+
+44. **System tray host coexistence**: Quickshell registers a `StatusNotifierHost-<pid>-<n>` per shell. Multiple hosts can coexist (waybar + qs both showing trays). Items broadcast to all. To fully transition off another bar, kill its tray host explicitly.
+
+45. **`pragma Singleton` MUST be the first non-blank, non-comment statement — and the qmlscanner does NOT strip `//` line comments before tracking braces.** A `{` anywhere in a file-header `//` comment (e.g. `// returns array<{ id, preview }>`) makes the scanner think you're already inside a QML object, so the pragma is silently ignored. The synthesized qmldir then registers your file as a regular type, not a singleton:
+
+    ```text
+    # broken: ClipboardService 1.0 ClipboardService.qml
+    # working: singleton ClipboardService 1.0 ClipboardService.qml
+    ```
+
+    At runtime, references to the "singleton" resolve to the type name (an opaque object whose `Object.keys(...)` returns `[]`); calls like `ClipboardService.openPopup()` throw `TypeError: Property 'openPopup' of object ClipboardService is not a function`. The `}` in the same comment does NOT rebalance — once the brace count goes off, the scanner is lost.
+
+    **Fix**: put `pragma Singleton` on the very first non-blank line of the file (above the header comment block), or rewrite any `{`/`}` in pre-pragma comments. Diagnose with `qs -p <path> -vv 2>&1 | grep "intercept.*qmldir"` and look for the missing `singleton` keyword.
+
+46. **niri's `WindowFocusChanged` event fires with `id: null` when one of YOUR layer-shell surfaces takes keyboard focus.** If you're naively using this event to dismiss popups (e.g. "close popup when user focuses an app"), opening a `PanelWindow` with `WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand` will immediately self-dismiss the popup you just opened: niri reports "no toplevel focused" right after the layer surface grabs focus, and a moment later it bounces back to the previously-focused toplevel.
+
+    Workaround: filter `id === null` in your event handler so only real toplevel focus changes trigger dismissal:
+
+    ```qml
+    } else if (event.WindowFocusChanged) {
+        const id = event.WindowFocusChanged.id;
+        if (id !== null && id !== undefined) root.windowFocused(id);
+    }
+    ```
+
+    Tradeoff: you also lose dismissal on "user switched to a truly empty workspace" (which also reports `id: null`), but in practice popups overlap the bar and the bar is anchored on every workspace anyway.
+
+47. **`qs ipc call` connects to the *oldest* matching instance unless you pass `-n`/`--newest`.** During development you'll often have stale sockets/by-pid symlinks left over from killed processes; `/run/user/$UID/quickshell/by-pid/<pid>` symlinks aren't auto-cleaned. The `qs ipc -vv ...` log shows which instance it picked.
+
+    **First, though, `qs` has to know *which config* you mean — it does not infer that from whatever daemon happens to be running.** A bare `qs ipc call …` looks for a config literally named `default`, so against a daemon started as `qs -p /path/to/shell -d` it fails before it ever reaches instance selection:
+
+    ```
+    Could not find "default" config directory or shell.qml in any valid config path.
+    ```
+
+    Selection flags have to match how the daemon was launched: `-p <path>` for a path-launched shell, `-c <name>` for one under `$XDG_CONFIG_HOME/quickshell/<name>/`. `qs -p .` works from inside the clone. The same applies to `qs list` and `qs log`, which is what makes the error confusing — it reads like "no shell is running" when the shell is running fine and simply wasn't named.
+
+    Diagnose: `ls /run/user/$UID/quickshell/by-pid/` — any pids that aren't running are stale. Clean with:
+
+    ```bash
+    for link in /run/user/$UID/quickshell/by-pid/*; do
+        pid=$(basename "$link")
+        kill -0 "$pid" 2>/dev/null || rm -f "$link" "$(readlink "$link")"
+    done
+    ```
+
+48. **`WlSessionLock` instantiates per-screen surfaces via its `surface: Component { ... }`, NOT a `Variants { model: Quickshell.screens }` block.** `WlSessionLock` is itself per-shell (one instance owns the protocol-level lock); the compositor asks for one surface per output and Quickshell instantiates the Component for each. Wrapping `WlSessionLock` in `Variants` gets you N independent locks racing each other for the protocol; only one wins, the others log errors.
+
+    ```qml
+    WlSessionLock {
+        locked: LockService.locked
+        surface: Component { LockSurface { } }   // <-- one Component, fans out
+    }
+    ```
+
+49. **`PamContext` auto-restarts the conversation after a `Failed` result, firing a fresh `onMessageChanged` with `"Password:"` within microseconds.** If your lock UI clears its error state inside `onMessageChanged` ("a fresh prompt means the previous error is no longer relevant"), the red "Authentication failed" label vanishes faster than the eye can register. Two viable patterns:
+
+    - Store the error in service-level state and clear it only when the user submits a new attempt (in `respond()`); the error is a property of "the most recent attempt" and persists until superseded.
+    - Hold the error in a Timer-bound transient state for ~1.5 s before clearing.
+
+    The first pattern is cleaner.
+
+50. **`pam_unix.so` enforces a ~2 s delay on every auth failure** (`FAIL_DELAY` in `/etc/login.defs`, applied via `pam_faildelay.so` or `pam_unix`'s own jitter). Your lock UI MUST acknowledge this — if you clear the password field on Enter and show no other feedback, users see a frozen-looking screen for 2 s and assume the lock is broken. Two acceptable patterns:
+
+    - Lock the input (`readOnly: pamChecking` + dim opacity) until `onCompleted` fires. The user can clearly see their input was received and the result is pending.
+    - Add `nodelay` to your PAM service file (replace `auth include login` with `auth required pam_unix.so nodelay`). Removes the delay entirely. Mild security trade-off — physical attacker can brute-force faster — usually acceptable for a screen lock since physical access already breaks most assumptions.
+
+51. **`MultiEffect` (and any `layer.effect`) requires `layer.enabled: true` on its source item.** The shader samples a texture; without `layer.enabled` there's no offscreen render-target to sample from, and the effect silently no-ops. Easy to miss because the source still renders normally — just unblurred.
+
+    ```qml
+    Image {
+        source: "..."
+        layer.enabled: true                    // <-- required
+        layer.effect: MultiEffect {
+            blurEnabled: true; blur: 1.0; blurMax: 64
+        }
+    }
+    ```
+
+52. **`WlSessionLock` automatically updates systemd-logind's `LockedHint` property when `locked` toggles**, but does NOT subscribe to logind's `Lock` D-Bus signal — it's outbound-only. Verify the outbound side with `loginctl show-session $XDG_SESSION_ID -p LockedHint`.
+
+    **Inbound: an external `loginctl lock-session` call does NOT directly lock your shell.** It only flips logind's `LockedHint` to `yes`, which `WlSessionLock` doesn't listen for. Historically an idle daemon supplied the missing bridge as a side effect (`hypridle`'s `lock_cmd`, `swayidle ... lock`); once idle handling went native (gotcha #69) that daemon left and took the accidental bridge with it.
+
+    So **power-menu "Lock" buttons must call `LockService.lock()` directly** rather than shelling out to `loginctl lock-session`. Nothing is lost: `WlSessionLock` sets `LockedHint` itself, so logind still learns the session is locked.
+
+    To honour the signal for *external* callers, see gotcha #70 — Quickshell has no generic D-Bus client, so it has to come from a subprocess.
+
+53. **`waypaper` writes the active wallpaper as a single line in `~/.config/waypaper/config.ini`** under the `[Settings]` section: `wallpaper = /absolute/path/to/image.ext` (`~`-relative paths are NOT expanded by waypaper itself but appear as-typed if you set them via the GUI). Useful for any shell component that needs to know the desktop wallpaper (lock screen blur background, color sampler, MPRIS art fallback, etc.). Re-read on demand via `FileView` with `watchChanges: true`. If waypaper isn't installed, fall back to parsing `pgrep -af 'swaybg|swww|hyprpaper'` arguments — fragile but works.
+
+54. **Browser MPRIS adapters intermittently omit `mpris:artUrl` from metadata bursts; centralize the cached art URL at the singleton level.** Chromium-based browsers (Firefox, Zen, Brave, etc.) playing YouTube Music and similar web-audio sources publish track metadata that lacks `mpris:artUrl` for the first few seconds of a track — and occasionally for entire tracks. The `xesam:title/artist/album` keys arrive normally, but `mpris:artUrl` is absent. Quickshell's `MprisPlayer.trackArtUrl` faithfully reflects the empty value.
+
+    Diagnose by dumping the metadata dict from a `MprisPlayer`:
+
+    ```qml
+    const md = player.metadata || {};
+    for (const k of Object.keys(md))
+        console.log(k, "=", JSON.stringify(md[k]));
+    // → mpris:length, mpris:trackid, xesam:album, xesam:artist, xesam:title, xesam:url
+    //   (note: NO mpris:artUrl — the upstream data is genuinely missing)
+    ```
+
+    If each consumer (bar popup, lock surface, etc.) holds its own `cachedArtUrl` that resets on construction, then **lazily-built consumers like `WlSessionLock` surfaces** — which are recreated every lock cycle — start with an empty cache and never see the URL that the long-lived bar popup observed earlier. Result: art shows in the bar but not on the lock screen, even though both wrap the same MPRIS player.
+
+    **Fix**: hold the cache in your MPRIS service singleton, not in each consumer:
+
+    ```qml
+    // MediaService.qml  (pragma Singleton)
+    property string cachedArtUrl: ""
+
+    function _refreshArt() {
+        if (currentPlayer && currentPlayer.trackArtUrl)
+            cachedArtUrl = currentPlayer.trackArtUrl;
+        // Otherwise hold whatever we last cached.
+    }
+
+    onCurrentPlayerChanged: { cachedArtUrl = ""; _refreshArt(); }
+    Component.onCompleted: _refreshArt()
+
+    Connections {
+        target: root.currentPlayer
+        enabled: root.currentPlayer !== null
+        function onTrackChanged()       { root.cachedArtUrl = ""; root._refreshArt(); }
+        function onTrackArtUrlChanged() { root._refreshArt(); }
+    }
+    ```
+
+    Each consumer reads `MediaService.cachedArtUrl` as a `readonly property string` — the lock surface inherits whatever URL the bar popup cached at any earlier point in the shell's lifetime. The cache resets only on a real track change or player change, never just because a consumer was rebuilt.
+
+55. **Unicode media-control glyphs render as Noto Color Emoji on Linux even with the U+FE0E (VS15) text-presentation selector.** Glyphs like `⏮ ▶ ⏸ ⏭` are emoji-class codepoints; Qt's font fallback resolves them to the first font with the codepoint, which on a typical Linux setup is `Noto Color Emoji`. Appending `\uFE0E` (variation selector — text presentation) is supposed to force monochrome rendering, but Qt does NOT honor it reliably when the only font carrying the glyph is a colour-emoji font:
+
+    ```qml
+    Text { text: "⏮\uFE0E" }    // still rendered as Noto Color Emoji's orange pictogram
+    ```
+
+    Workarounds (in order of preference):
+
+    1. **Use a dedicated icon font** — Font Awesome, Material Symbols, or any Nerd Font has the glyphs in private-use codepoints with no emoji-presentation conflict:
+
+       ```qml
+       Text {
+           font.family: "Font Awesome 7 Free"
+           font.styleName: "Solid"
+           text: "\uf04b"   // play; \uf04c pause, \uf048 prev, \uf051 next
+           renderType: Text.NativeRendering
+       }
+       ```
+
+    2. **Draw the icons as `QtQuick.Shapes`** — fully font-independent but more code. Reasonable if you don't ship an icon font.
+
+    3. **Force a specific text-style font that has the glyph** — DejaVu Sans / Symbola / Noto Sans Symbols2 sometimes work, but availability varies wildly across distros.
+
+56. **`PopupWindow` (and `PanelWindow` for that matter) has no built-in fade-out animation; bridge with a `hideHold` Timer.** A real Wayland surface unmaps the moment its `visible` property flips false, which cuts off any opacity / transform tween mid-animation. The fix is to keep the surface mapped for the duration of the fade by ANDing visibility with a short timer that fires when `wantOpen` drops:
+
+    ```qml
+    PopupWindow {
+        property bool wantOpen: false
+        visible: wantOpen || hideHold.running
+        Timer { id: hideHold; interval: 180; repeat: false }
+        onWantOpenChanged: {
+            if (wantOpen) hideHold.stop();
+            else          hideHold.restart();
+        }
+
+        Rectangle {
+            id: container
+            anchors.fill: parent
+            opacity: popup.wantOpen ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
+            transform: Translate {
+                y: popup.wantOpen ? 0 : 4
+                Behavior on y { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
+            }
+        }
+    }
+    ```
+
+    Pick the timer interval just longer than the longest tween (here 180 ms > 150 ms). Setting `visible: false` directly without this scaffolding causes a hard cut. Imperative consumers should set `wantOpen = false` instead of `visible = false` and let the timer drive the unmap.
+
+57. **Hover-driven popups need a "linger" timer to bridge the anchor → popup gap.** When a popup opens on hover (calendar, tooltips, drop-down menus) and is positioned a few pixels below its anchor item, the cursor briefly crosses empty space when moving from one to the other. Both the anchor's `containsMouse` and the popup's hover detector go false during the traversal, dismissing the popup mid-move. Solution: gate `wantOpen` on a 200-300 ms timer that restarts on every hover transition:
+
+    ```qml
+    property bool hoveringTrigger: false   // bound from the anchor MouseArea
+    property bool hoveringPopup:   false   // bound from the popup body MouseArea
+
+    readonly property bool _activeHover: hoveringTrigger || hoveringPopup
+    readonly property bool wantOpen: pinned || _activeHover || linger.running
+    Timer { id: linger; interval: 250; repeat: false }
+    on_ActiveHoverChanged: {
+        if (_activeHover) linger.stop();
+        else              linger.restart();
+    }
+    ```
+
+    The popup stays open for `linger.interval` ms after hover leaves either zone; if hover re-enters either zone in that window, the timer is cancelled and the popup remains visible. 200-300 ms is enough for a deliberate cursor traversal but short enough that an actual "leave" feels responsive.
+
+58. **`PopupWindow` surface alpha + rounded corners → "torn corner" appearance on dark wallpapers.** With `color: "transparent"` set and a rounded inner Rectangle (`anchors.fill: parent; radius: 6`), the four small triangles outside the rounded fill but inside the rectangular surface bounds show whatever's behind the surface. On busy or dark wallpapers this looks like the popup has been crudely cut out. Two practical mitigations:
+
+    - **Drop shadow that extends past the rounded shape.** Wrap the inner Rectangle with `layer.enabled: true` + a `MultiEffect` shadow. The shadow's soft Gaussian blur fades into the wallpaper, hiding the boundary between the rounded popup and whatever's behind. Requires giving the surface ~12 px transparent padding on each side so the shadow has room to render:
+
+      ```qml
+      PopupWindow {
+          implicitWidth: 320 + 24    // surface is +24 wider than the visible body
+          implicitHeight: container.implicitHeight + 24
+          anchor.rect.y: anchorItem.height + 6 - 12   // compensate so visible body sits at +6
+
+          Rectangle {
+              id: container
+              anchors.fill: parent
+              anchors.margins: 12    // shadow padding
+              radius: Theme.radius
+              color: Theme.bg
+
+              layer.enabled: true
+              layer.effect: MultiEffect {
+                  shadowEnabled: true
+                  shadowColor: Qt.rgba(0, 0, 0, 0.5)
+                  shadowVerticalOffset: 4
+                  shadowBlur: 0.6
+              }
+          }
+      }
+      ```
+
+    - **Mask the surface to the rounded shape.** A `MultiEffect` with `maskEnabled` and a separate rounded mask source. More robust but ~30 lines per popup; do this only if the shadow approach isn't enough.
+
+    Note this affects `PopupWindow`, not `PanelWindow` — layer-shell PanelWindows behave the same on most wlroots-based compositors, but the gotcha was first observed on PopupWindow + niri.
+
+59. **Cross-compositor support via a `Loader`-based backend abstraction.** A shell built around niri-only `Process`-based IPC can be ported to Hyprland and Sway / i3 with surprisingly little churn — the trick is to isolate the compositor coupling behind a small interface and select the right backend at startup.
+
+    **Architecture**:
+
+    ```
+    compositor/
+    ├── Compositor.qml        — Singleton, env-var detection, public surface
+    ├── BackendNiri.qml       — Process-based, parses `niri msg --json event-stream`
+    ├── BackendHyprland.qml   — wraps Quickshell.Hyprland
+    ├── BackendSway.qml       — wraps Quickshell.I3
+    └── BackendStub.qml       — empty fallback for unknown compositors
+    ```
+
+    **Detection** (in the singleton):
+
+    ```qml
+    readonly property string detectedKind: {
+        const env = (k) => Quickshell.env(k) || "";
+        const override = env("QS_COMPOSITOR").toLowerCase();
+        if (["niri","hyprland","sway","i3","stub"].indexOf(override) >= 0) return override;
+        if (env("HYPRLAND_INSTANCE_SIGNATURE")) return "hyprland";
+        if (env("SWAYSOCK"))                   return "sway";
+        if (env("NIRI_SOCKET"))                return "niri";
+        const xdg = env("XDG_CURRENT_DESKTOP").toLowerCase();
+        if (xdg.indexOf("hyprland") >= 0) return "hyprland";
+        if (xdg.indexOf("sway") >= 0)     return "sway";
+        if (xdg.indexOf("niri") >= 0)     return "niri";
+        return "stub";
+    }
+    ```
+
+    **Backend selection via `Loader { sourceComponent }`** — only the picked backend is instantiated, so unused backends don't pay setup cost (and importing `Quickshell.Hyprland` on a Sway machine is fine because Quickshell ships all the modules in one package; they just have empty state when their compositor isn't running):
+
+    ```qml
+    Loader {
+        id: backendLoader
+        sourceComponent: {
+            switch (detectedKind) {
+                case "niri":     return niriComp;
+                case "hyprland": return hyprComp;
+                case "sway":
+                case "i3":       return swayComp;
+                default:         return stubComp;
+            }
+        }
+    }
+    Component { id: niriComp;  BackendNiri     { } }
+    Component { id: hyprComp;  BackendHyprland { } }
+    Component { id: swayComp;  BackendSway     { } }
+    Component { id: stubComp;  BackendStub     { } }
+    ```
+
+    **Public surface re-exports the backend's properties** — consumers reference `Compositor.workspaces` etc. and never see the backend directly:
+
+    ```qml
+    readonly property var    workspaces:    backend ? backend.workspaces    : []
+    readonly property string focusedOutput: backend ? backend.focusedOutput : ""
+    signal windowFocused(var id)
+    Connections {
+        target: root.backend
+        function onWindowFocused(id) { root.windowFocused(id); }
+    }
+    ```
+
+    **Caveats**:
+
+    - **`pragma Singleton` placement is critical** for the abstraction to register correctly. Per gotcha #45, the pragma must be the very first non-blank line, and any header comments must NOT contain `{` or `}` characters — qmlscanner doesn't strip them, gets confused about brace nesting, and silently registers your file as a regular type instead of a singleton. The Compositor singleton hits this hard because its docstring naturally wants to write `{ id, idx, output, ... }` to describe the workspace shape.
+    - **Workspace shape conventions differ.** Niri exposes a flat array via JSON; Hyprland's `HyprlandWorkspace` has `id`/`name`/`active`/`focused`/`monitor`; I3's `I3Workspace` has `num`/`name`/`focused`/`visible`/`monitor`. Each backend re-shapes data into a common `{ id, idx, output, is_focused, is_active, name }` record so consumers don't need conditionals.
+    - **i3 / Sway has no keyboard-layout-changed IPC event.** The layout OSD silently never triggers on the sway/i3 backend (`currentLayout` stays `""`) — accept it or implement polling.
+    - **Each compositor has its own quirks** about what constitutes a "window focused" event. Niri's `WindowFocusChanged` fires with `id: null` for layer-shell focus grabs (gotcha #46) — backends must filter this. Hyprland's `activeToplevel` going null is a real event. I3/Sway's `rawEvent` for `window/focus` is the cleanest.
+    - **Hot-reload caveat**: changes to a singleton's `pragma Singleton` placement may not be picked up by a running daemon's already-generated `qmldir` cache. Restart the daemon (`qs kill --shell <id>` then `qs -p <path> -d`) when introducing or relocating a singleton.
+
+60. **`PwObjectTracker` is required for `PwNode.properties` to populate, AND its `objects` list can be a reactive expression that auto-rebuilds.** This combination is essential for any "per-app" Pipewire UI (volume mixer, app-specific routing, etc.).
+
+    Without tracking, `node.properties` is empty:
+
+    ```qml
+    // ✗ application.name comes back undefined
+    const stream = Pipewire.nodes.values.find(n => n.isStream);
+    console.log(stream.properties["application.name"]);   // undefined
+    ```
+
+    With explicit tracking:
+
+    ```qml
+    PwObjectTracker {
+        objects: {
+            // Reactive: re-evaluates whenever Pipewire.nodes.values changes,
+            // so newly-launched apps' streams appear in the popup live.
+            const out = [Pipewire.defaultAudioSink, Pipewire.defaultAudioSource];
+            const all = Pipewire.nodes.values;
+            for (let i = 0; i < all.length; i++) {
+                const n = all[i];
+                if (n && n.audio && n.isStream) out.push(n);
+            }
+            return out;
+        }
+    }
+    ```
+
+    Now `stream.properties["application.name"]`, `application.icon-name`, `media.name`, `media.class`, etc. are all readable.
+
+    **Filter app-output streams by `media.class`, not `isSink`.** The semantics of `isSink` are subtle for streams — what you actually want is:
+
+    ```qml
+    function isAppOutputStream(n) {
+        if (!n || !n.audio || !n.isStream) return false;
+        return (n.properties && n.properties["media.class"]) === "Stream/Output/Audio";
+    }
+    ```
+
+    `Stream/Output/Audio` = an app producing audio that flows INTO a sink (Spotify, Firefox playing YouTube, Discord call audio). `Stream/Input/Audio` = a capture client reading FROM a source (OBS recording the mic, voice chat sending mic).
+
+61. **`Hyprland.workspaces` and `I3.workspaces` are `ObjectModel<T>`, not arrays.** Reading them in JS requires `.values` to materialise an array:
+
+    ```qml
+    // ✗ Iterates the model rows but the per-row API is awkward
+    for (let i = 0; i < Hyprland.workspaces.length; i++) { ... }
+
+    // ✓ Get a JS array out
+    const list = Hyprland.workspaces ? Hyprland.workspaces.values : [];
+    list.forEach(w => { console.log(w.id, w.name, w.focused); });
+    ```
+
+    The `.values` access is also reactive — bindings that read it update when the model changes. The same convention applies to `Pipewire.nodes`, `Bluetooth.devices`, `SystemTray.items`, `NotificationService.trackedNotifications`, and any other Quickshell `ObjectModel<T>` collection.
+
+62. **Hot-reload picks up file content but NOT the qmldir registration.** When you add a new singleton (a file with `pragma Singleton`) — or fix the pragma's placement per gotcha #45 by moving it to line 1 — the running daemon's qmldir cache stays stale. The import line resolves but the singleton's properties come back `undefined` to consumers, because the file has been re-registered as a regular type instead of a singleton.
+
+    **Symptom**:
+
+    ```text
+    Unable to assign [undefined] to QString
+    TypeError: Cannot call method 'filter' of undefined
+    ```
+
+    …despite the singleton's QML being syntactically correct. A fresh `qs` invocation (smoke test) loads the singleton fine, proving the code's right — only the running daemon has the stale cache.
+
+    **Fix**: restart the daemon.
+
+    ```bash
+    qs kill --shell <id>                  # graceful
+    qs -p /path/to/config -d &            # restart
+    ```
+
+    Or `pkill qs` if you don't have the shell id handy.
+
+    **Don't try `kill -HUP`** — SIGHUP terminates the daemon entirely, it doesn't trigger reload. There is no signal-driven reload mechanism.
+
+63. **`PanelWindow` defaults to layer-shell `Top`, which is occluded by fullscreen surfaces.** A bar / OSD / popup created as a plain `PanelWindow` lands on the `Top` layer (`aboveWindows: true` maps to `WlrLayershell.layer: WlrLayer.Top`). On most wlroots compositors and on niri, fullscreen toplevels render *above* `Top` — so an OSD that works fine in normal use vanishes the moment the user enters a fullscreen game, `mpv -fs`, or a video player. That's precisely when audio-only volume / brightness changes provide no visual confirmation and the OSD is most needed.
+
+    **Fix**: switch the surface to the `Overlay` layer for anything that should pierce fullscreen (OSDs, urgent notifications, lock surface confirmations):
+
+    ```qml
+    import Quickshell.Wayland
+
+    PanelWindow {
+        // ...
+        WlrLayershell.layer: WlrLayer.Overlay
+    }
+    ```
+
+    `Overlay` sits above fullscreen surfaces and above `Top`. Use sparingly — anything on `Overlay` obscures the user's view of their app. The bar itself should stay on `Top` (it'd be obnoxious during fullscreen video). Volume / brightness / caps-lock OSDs are good fits because they fade out automatically.
+
+    `Overlay` is purely a Z-order hint and does NOT grant input focus. If you also need keystrokes (launcher, search field, etc.), pair with `WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive`.
+
+64. **`SystemClock` doesn't recover cleanly from system suspend.** Quickshell's `SystemClock` is a reactive view of the system clock that is "cheaper than `Date`-based polling" — implemented as a `QTimer` that fires on the configured precision boundary (Hours / Minutes / Seconds). The internal timer uses Qt's monotonic clock, which doesn't advance during system suspend. After the system wakes, the timer's next-fire alignment is broken: with `precision: Minutes`, the displayed `date` property remains stuck at the pre-suspend value, sometimes for the full minute, occasionally indefinitely until the surface owning the clock is rebuilt.
+
+    **Where it bites hardest**: lock screens. A user suspends their machine while locked, wakes hours later, and the lock-screen clock still reads the suspend-time HH:MM. Locking-and-unlocking-and-relocking "fixes" it because each lock cycle constructs a fresh `SystemClock` instance that reads the wall clock at construction. With `precision: Seconds` the bug is invisible (self-corrects within a second of wake), but `precision: Minutes` exposes it visibly.
+
+    **Fix**: for any clock that must remain correct across suspend/resume, replace `SystemClock` with a plain QML `Timer` + `new Date()`:
+
+    ```qml
+    // Before (broken on resume):
+    SystemClock { id: clock; precision: SystemClock.Minutes }
+    Text { text: Qt.formatDateTime(clock.date, "HH:mm") }
+
+    // After (bulletproof):
+    property var now: new Date()
+    Timer {
+        interval: 1000
+        running: true
+        repeat: true
+        onTriggered: now = new Date()
+    }
+    Text { text: Qt.formatDateTime(now, "HH:mm") }
+    ```
+
+    `new Date()` always reads the system clock fresh — it can't go stale. The 1 s tick interval costs nothing visually because Text bindings only re-render when the formatted string changes (i.e. once per minute for an HH:mm clock). For surfaces that exist only briefly (lock surface, popups), the efficiency saving SystemClock provides over Date polling is irrelevant.
+
+    Bar clocks at `precision: Seconds` can keep using SystemClock — the bug is masked there. The trade-off only matters when you specifically need correct time after wake without a fresh widget construction.
+
+65. **`Behavior on sourceComponent` does not animate.** A `Loader` switching between view components (a "view-stack" pattern, e.g. tile grid → detail view inside a popup) feels like it deserves a fade transition. The intuitive thing to write is:
+
+    ```qml
+    Loader {
+        sourceComponent: tilesView // or networkView, etc.
+        Behavior on sourceComponent {
+            // ...crossfade animation...
+        }
+    }
+    ```
+
+    But `Behavior` only animates types it can interpolate (`real`, `int`, `color`, `vector`-types, etc.). `Component` is not an interpolatable type, so the Behavior is silently ignored — the swap happens instantly, no errors, no warnings.
+
+    **Fix**: indirect through a separate property that *is* animated, and update it inside a `ScriptAction` mid-animation:
+
+    ```qml
+    Loader {
+        id: viewLoader
+        property string _appliedView: someService.currentView   // mirror
+
+        sourceComponent: switch (_appliedView) {
+            case "network": return networkView;
+            // ...
+        }
+
+        opacity: 1.0   // animated, not sourceComponent
+
+        Connections {
+            target: someService
+            function onCurrentViewChanged() {
+                if (someService.currentView === viewLoader._appliedView) return;
+                transition.restart();
+            }
+        }
+
+        SequentialAnimation {
+            id: transition
+            NumberAnimation { target: viewLoader; property: "opacity"; to: 0.0; duration: 100 }
+            ScriptAction { script: viewLoader._appliedView = someService.currentView }
+            NumberAnimation { target: viewLoader; property: "opacity"; to: 1.0; duration: 140 }
+        }
+    }
+    ```
+
+    The opacity tween + script-action swap is the canonical workaround. See `controlcenter/ControlCenterPopup.qml` for the production implementation in this repo.
+
+66. **`Repeater` delegate's `parent` is the Repeater's parent — not the Repeater itself.** When you write:
+
+    ```qml
+    Item {
+        id: outer
+        property real cellWidth: width / 12
+
+        Row {
+            Repeater {
+                model: 12
+                delegate: Item {
+                    width: parent.parent.parent.cellWidth   // BUG
+                }
+            }
+        }
+    }
+    ```
+
+    The delegate items are inserted as siblings of the Repeater inside the Repeater's parent (the `Row`). So inside the delegate:
+    - `parent` is the **Row** (not the Repeater)
+    - `parent.parent` is **`outer`** (where `cellWidth` lives)
+    - `parent.parent.parent` is whatever's *above* `outer` — wrong target, undefined property, silent 0-width result.
+
+    Symptom: items render with zero size; the Repeater area appears empty. No console error.
+
+    **Fix**: always reference the surrounding container by `id`, never by `parent` chain from a delegate:
+
+    ```qml
+    delegate: Item { width: outer.cellWidth }
+    ```
+
+    More robust against refactoring (adding/removing wrapper Items doesn't break the binding) and self-documenting. This bit us in `weather/WeatherDetailPopup.qml`'s 12-cell hourly strip — the strip rendered as 0-px-wide cells until we replaced `parent.parent.parent._cellWidth` with `hourlyStrip._cellWidth`.
+
+67. **Horizontal `Flickable` wheel-scroll is unreliable.** A `Flickable` with `flickableDirection: Flickable.HorizontalFlick` accepts mouse-drag and touch flicks horizontally as expected, but vertical mouse-wheel events are NOT translated to horizontal `contentX` changes by default — wheel just doesn't scroll the strip. The standard workaround is a child `MouseArea` with `acceptedButtons: Qt.NoButton` (so it doesn't steal clicks) intercepting `onWheel` and writing to `contentX` manually:
+
+    ```qml
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.NoButton
+        onWheel: wheel => {
+            const delta = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.angleDelta.x;
+            flick.contentX = Math.max(0, Math.min(flick.contentWidth - flick.width,
+                                                  flick.contentX - delta));
+            wheel.accepted = true;
+        }
+    }
+    ```
+
+    This *works* but feels janky in practice — wheel ticks deliver large `angleDelta` values that map awkwardly to `contentX` deltas, motion isn't smooth, and per-Qt-version tuning is unpleasant. Touchpad two-finger scroll on horizontal axis works better but isn't universal.
+
+    **Pragmatic fix**: avoid horizontally-scrollable Flickables entirely on desktop. Pick a fixed set of items that fits the popup width (e.g. 12 hours at `parent.width / 12` per cell instead of 24 in a scrollable strip). The visual completeness of "everything visible at once" tends to beat "more data behind a scroll".
+
+68. **Imperative assignment to a property silently destroys its binding.** This is one of QML's quietest, nastiest footguns. If a property is set up with a binding by the parent, and the component then writes to that same property at runtime via plain assignment (`root.foo = false`), Qt **silently severs the binding**. The property holds whatever value was assigned; the source of the binding can change all it wants — the property stops listening. There is no warning, no log, nothing. The component just stops being reactive.
+
+    **Symptom in practice**: a popup / dialog / overlay opens fine the first time. The user dismisses it via an internal close button. They try to open it again — nothing happens. State looks correct in the controlling singleton (the `open` / `visible` flag flipped to `true`), but the visual component never updates because its binding was severed by the close button's `root.open = false` line. Until the component is re-instantiated (page reload, view swap, daemon restart) the binding stays dead.
+
+    **The trap pattern**:
+
+    ```qml
+    // Parent.qml
+    MyPopup {
+        open: ServiceSingleton.popupOpen
+    }
+
+    // MyPopup.qml — looks innocent
+    property bool open: false
+    visible: open
+
+    Button {
+        text: "Done"
+        onClicked: root.open = false   // <-- breaks the parent's binding
+    }
+    ```
+
+    First click of "Done" sets `root.open = false`, severing the binding. From this moment on, `ServiceSingleton.popupOpen = true` does NOT propagate to `root.open`. The popup is permanently invisible until the QML component is recreated.
+
+    **Fix**: make the component purely presentational. Never write to a property the parent has bound. Replace the imperative close with a signal:
+
+    ```qml
+    // MyPopup.qml — corrected
+    signal closeRequested
+
+    Button {
+        text: "Done"
+        onClicked: root.closeRequested()   // emit, don't assign
+    }
+
+    // Parent.qml
+    MyPopup {
+        open: ServiceSingleton.popupOpen
+        onCloseRequested: ServiceSingleton.closePopup()
+    }
+    ```
+
+    Now the parent owns visibility end-to-end. The signal-out / binding-in arrangement keeps the wire intact across any number of open/close cycles.
+
+    **General rule**: if a property is part of a component's external API and the parent binds it, **the component must treat that property as read-only**. Internal state that needs to be mutable should be stored in *separate* properties; the bound property mirrors the public contract via binding only.
+
+    Bit us in `settings/controls/ColorPicker.qml`: the Done button's `function close() { root.open = false }` worked once, then the colour picker stopped reopening until shell reload. The fix was the signal-based pattern above.
+
+69. **`IdleMonitor` (Quickshell ≥ 0.3.0, `Quickshell.Wayland`) is an `ext-idle-notifier-v1` client** — it makes an external idle daemon unnecessary. Properties: `enabled` (bool), `timeout` (double, **seconds** — not ms, unlike every `Timer` next to it), `respectInhibitors` (bool), `isIdle` (readonly bool).
+
+    Three things worth knowing:
+
+    - **`timeout` is a single value**, so N idle stages does *not* mean N monitors. Arm one monitor at the earliest stage and express later stages as delays measured from that point — N monitors all race the same activity stream and fire in nondeterministic order.
+    - **`respectInhibitors: true` honours `idle-inhibit-v1`** from other clients (mpv, browsers playing video, Steam) for free. Default it on; users expect video playback to suppress the lock.
+    - **`enabled: false` drops the subscription entirely**, which is the correct implementation of a "keep awake" toggle when your shell is the only idle consumer. You do not need to publish an `IdleInhibitor` of your own to inhibit yourself.
+
+    `IdleInhibitor` (same module) is the *producer* side and requires a `window` to attach to — only reach for it if something outside your shell is also watching idle.
+
+70. **Watching D-Bus without a D-Bus client: use `gdbus monitor`, not `dbus-monitor`.** `dbus-monitor --system` needs privileges a user session doesn't have — it logs `unable to enable new-style monitoring: org.freedesktop.DBus.Error.AccessDenied` and falls back to eavesdropping, which modern dbus policy also denies. `gdbus monitor` uses ordinary match rules and works unprivileged:
+
+    ```
+    gdbus monitor --system --dest org.freedesktop.login1
+    ```
+
+    One line per signal, covering **every object owned by that name** (manager *and* per-session objects), which is what makes a single watcher enough:
+
+    ```
+    /org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (true,)
+    /org/freedesktop/login1/session/_33: org.freedesktop.login1.Session.Lock ()
+    ```
+
+    Three things that bite:
+
+    - **logind escapes session ids into object paths** — `XDG_SESSION_ID=3` becomes `/session/_33`, because `_3` escapes the leading digit. Don't string-build it; ask, and parse JSON rather than busctl's native output:
+      ```
+      busctl --system --json=short call org.freedesktop.login1 /org/freedesktop/login1 \
+        org.freedesktop.login1.Manager GetSession s "$XDG_SESSION_ID"
+      -> {"type":"o","data":["/org/freedesktop/login1/session/_33"]}
+      ```
+    - **Never act on `Session.Unlock`.** It's emitted by `loginctl unlock-session`, and honouring it dismisses the lock screen without PAM ever running — a straight authentication bypass. Accepting `Lock` from anyone is fine; accepting `Unlock` is not.
+    - **Locking on `PrepareForSleep` alone is too late.** The signal fires and logind suspends; your lock surface maps asynchronously and may not be up in time. Hold a **delay** inhibitor continuously and release it only once the lock is confirmed on screen (`WlSessionLock.secure`):
+      ```
+      systemd-inhibit --what=sleep --mode=delay --who=<you> --why=<reason> sleep infinity
+      ```
+      This is what `kwin_wayland` does — check `systemd-inhibit --list` on any KDE box. Bound the wait with a watchdog under `InhibitDelayMaxSec` (5 s default, readable via the `InhibitDelayMaxUSec` property): logind proceeds regardless once the budget expires, so failing open is the only real option — the watchdog just keeps the release deliberate.
+
+71. **Quickshell can consume D-Bus services but cannot provide one.** Every D-Bus module it ships — `Mpris`, `Notifications`, `SystemTray`, `UPower`, `Polkit`, `DBusMenu` — is a *client*, implemented C++-side. There is no generic export API, so you cannot own a bus name or answer a method call from QML. Anything that requires being a D-Bus *service* needs a helper process; see `system/inhibit-bridge.py` for the shape (own the name, publish state as JSON lines on stdout, read it back with `Process` + `SplitParser`).
+
+72. **Honouring "don't idle" requests means implementing two unrelated protocols.** `IdleMonitor.respectInhibitors` covers only Wayland `idle-inhibit-v1`. A large class of apps — browsers in particular — use the older D-Bus route instead, and will happily let your screen lock mid-video if you only implement the Wayland one.
+
+    Firefox-family browsers take the Wayland inhibitor **only when video is fullscreen**; windowed playback goes over D-Bus. That asymmetry makes the bug look intermittent and content-dependent, which is a miserable thing to debug from symptoms.
+
+    To cover the D-Bus half you must *own* these names (which is why gotcha #71 matters):
+
+    | Name | Object paths |
+    |---|---|
+    | `org.freedesktop.ScreenSaver` | `/org/freedesktop/ScreenSaver` **and** `/ScreenSaver` |
+    | `org.freedesktop.PowerManagement.Inhibit` | `/org/freedesktop/PowerManagement/Inhibit` |
+
+    `/ScreenSaver` is the legacy path and is not optional — it is the one hardcoded in Firefox's libxul. Confusingly, requests routed through **xdg-desktop-portal** arrive on the canonical path instead, so a real desktop needs both. Export one and you get a name that resolves, a service that looks healthy, and inhibits that silently never arrive.
+
+    Three further traps:
+
+    - **Release a client's inhibitors when it drops off the bus.** Subscribe to `NameOwnerChanged` and drop cookies whose sender vanished. A browser that crashes never sends `UnInhibit`, and without cleanup it wedges the machine awake until the shell restarts.
+    - **Never reuse cookies**, even after release, or a stale `UnInhibit` from a confused client cancels somebody else's inhibitor. Check the sender matches, too — cookies are small integers and trivially guessable.
+    - **Portal-routed requests carry an empty `application_name`.** Fall back to the sender's process name via `GetConnectionUnixProcessID` + `/proc/<pid>/cmdline` — `/proc/<pid>/comm` is capped at 15 bytes and truncates `xdg-desktop-portal-gtk` to `xdg-desktop-por`.
+
+    Diagnosing: `busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus NameHasOwner s org.freedesktop.ScreenSaver`. If that is `false`, every inhibit request on the system is failing silently. Note that `busctl call` is useless as a *test client* — it exits as soon as the call returns, so correct disconnect-cleanup immediately drops its cookie. Test with something that holds the connection open.
+
+73. **Quickshell does not reap child processes when the shell exits.** A `Process` still running at shutdown is reparented to init and keeps going. There is no cleanup pass, and `SIGKILL`ing the shell obviously cannot run one — but even a clean `SIGTERM` leaves them behind.
+
+    Whether that bites you depends on one thing: **does the child write to stdout continuously?** If it does, the closing pipe gives it `SIGPIPE` on its next write and it exits on its own. A 10 Hz `while true; do …; echo; done` poller is self-cleaning for exactly this reason. An event-driven watcher on a quiet system never writes, never gets signalled, and survives forever.
+
+    So the rule is conditional, which makes it easy to get wrong in both directions:
+
+    ```qml
+    // needed — only writes when the compositor emits an event
+    command: ["setpriv", "--pdeathsig", "TERM", "--", "niri", "msg", "--json", "event-stream"]
+
+    // not needed — echoes every 100ms, SIGPIPE cleans it up
+    command: ["sh", "-c", "while true; do ...; echo \"$C $N\"; sleep 0.1; done"]
+    ```
+
+    Two orphan classes are actively harmful rather than merely untidy:
+
+    - one holding a **logind delay inhibitor** (`systemd-inhibit --mode=delay`) keeps claiming a slice of the suspend budget with nothing behind it to do the work;
+    - one **owning a D-Bus name** makes the *next* shell fail to acquire it, so every request is answered by a process with no shell behind it. This is the nastiest failure mode, because the name resolves and the service looks alive.
+
+    Pair pdeathsig with an **intent-gated** death-watch. Restarting unconditionally on exit looks right and is not, because "the child exited" is also what teardown looks like — the handler then races the shell's own destruction and respawns into a half-torn-down state:
+
+    ```qml
+    onRunningChanged: {
+        if (!running && root._wantIt) { console.warn("..."); running = true; }
+    }
+    ```
+
+    Diagnose with `ps -eo pid,ppid,args | grep <command>`; orphans show `ppid=1`, or the pid of whatever subreaper adopted them.
+
+74. **`Quickshell.Services.Polkit` registers declaratively, and its `AuthFlow` has three traps that all fail silently.** Instantiating `PolkitAgent { path: "/org/yourshell/PolkitAgent" }` *is* the registration — there is no `register()` call. Only one agent per session holds the seat, so if another is running yours never activates; watch `isRegistered` and say so, because otherwise the shell looks fine and simply never prompts.
+
+    - **Never cache `flow` in a property.** Every request creates a *new* `AuthFlow`. A cached reference goes stale and submits into a dead object. Bind `Connections { target: agent.flow }` so it re-targets.
+    - **`flow.message` is a constant property** — no change signal — so it is only safe to read when a request starts, not from an arbitrary handler.
+    - **Guard the reset on deactivation.** If you want a close animation, `isActive` drops while you are still rendering; resetting unconditionally in `onIsActiveChanged` blanks the dialog mid-fade. Keep a `closing` flag and reset only when it is false.
+
+    One more, from the PAM side: `isResponseRequired` going true again means your last answer was consumed. Clearing your "checking…" state there is what un-sticks a multi-stage PAM conversation that re-prompts without ever emitting a failure.
+
+    **Testing it is the awkward part.** `pkexec true` will usually *not* prompt — most actions are `auth_admin_keep` and polkit caches the authorization for the session, so it silently succeeds. Use `pkcheck` against a plain `auth_admin` action instead, which asks the question without performing anything:
+
+    ```
+    pkcheck --action-id org.freedesktop.ModemManager1.Control --process $$ --allow-user-interaction
+    ```
+
+    It blocks on your prompt (exit 124 under `timeout`). Find candidates with `grep -l '<allow_active>auth_admin<' /usr/share/polkit-1/actions/*.policy`.
+
+    ⚠️ **An abandoned or cancelled prompt counts as a failed login.** This is not obvious anywhere in the polkit API, and it locked this repo's author out of his own machine while testing this exact feature. `polkit-agent-helper-1` starts the PAM conversation as soon as the agent begins, so walking away from the prompt makes `pam_unix` fail:
+
+    ```
+    polkit-agent-helper-1: pam_unix(polkit-1:auth): auth could not identify password for [user]
+    pam_faillock: Consecutive login failures for user ... account temporarily locked
+    ```
+
+    With `pam_faillock`'s default `deny=3`, **three abandoned test prompts lock the account** — TTYs included — for `unlock_time` (600 s default). The polkit side reports nothing; you find out at a login prompt.
+
+    So when testing an agent:
+
+    - Raise **at most one** interactive prompt per session, and clear the counter straight after:
+      ```
+      faillock --user $USER               # inspect
+      sudo faillock --user $USER --reset  # clear
+      ```
+    - Prefer the non-interactive check. `pkcheck` **without** `--allow-user-interaction` returns immediately, never starts a PAM conversation, and is free to run in a loop. It proves the agent is registered; only the interactive form proves the dialog renders.
+
+    This also has a UI consequence worth designing for: pressing Escape on a polkit prompt costs a strike, whichever agent is running. `polkit/PolkitDialog.qml` therefore requires **two** Escapes, with the second one labelled — a stray keypress should not spend one of the user's three.
+
+75. **`Quickshell.Networking` has four traps that make it look broken when it isn't.** All four cost time on this repo's migration off `nmcli`.
+
+    - **The wifi scanner is off by default.** `WifiDevice.networks` holds a *single* entry until you set `scannerEnabled = true` — 1 versus 21 on the test machine. It reads like the module failing to enumerate APs. It is also a continuous mode, not a one-shot: there is no `rescan()`, so the closest equivalent is cycling the property off and on.
+    - **`signalStrength` is 0.0–1.0**, not 0–100. Nothing warns you; you just get every network rendering as 0%.
+    - **`NetworkDevice.address` is the MAC address**, not the IP — `50:EB:F6:40:E2:06`, not `192.168.1.4`.
+    - ~~Per-object property changes do not invalidate a binding on the model.~~ **This was written here and it is wrong.** QML registers binding dependencies per property *read*, not per model, so `values[i].signalStrength` inside a binding tracks that object's property and re-evaluates correctly. Verified twice: a binding on `Hyprland.workspaces.values[i].focused` stayed correct across 14 workspace switches with zero stale samples, and a binding on `Networking` per-item `signalStrength` updated with no watchers at all. If a derived list looks stale, the cause is elsewhere — most often that it was assigned imperatively rather than bound. See gotcha #76 for the problem that *does* exist here.
+
+    Two capability limits worth knowing before planning around this module:
+
+    - **`NMSettings` is not constructible from QML.** It appears only as a parameter and list type, so `connectWithSettings()` can only re-use a profile that already exists. Consequences: you cannot create a **hidden**-network profile, and you cannot set up **WPA-Enterprise** (you can connect to an already-configured one, and `WifiSecurityType` reports `Wpa2Eap`/`WpaEap` correctly).
+    - **There is no VPN.** `DeviceType` is `None | Wifi | Wired`, full stop. A `tun` device such as Tailscale's simply does not appear.
+
+    A saved **hidden** network is a special case: it *does* appear in the list once in range, because NetworkManager probes for SSIDs it knows — but it reports `known = false` and `nmSettings = 0`, since the AP carrying the resolved SSID is not linked to the hidden profile. It still connects, because `connect()` lets NM use its own stored secrets. Only the "saved" label and a forget button are affected.
+
+    Finally, prefer `connect()` **before** prompting for a password. The backend may already hold the secret, and `connectionFailed(NoSecrets)` is how you learn it does not — which also gives you a real "wrong password" signal instead of parsing stderr.
+
+76. **A JavaScript array used directly as a `model` is a delegate-rebuild multiplier. Wrap it in `ScriptModel`.** This is the single most expensive mistake in this codebase's history — it has bitten at least six sites.
+
+    `Repeater` and `ListView` cannot diff a JS array. On *every* reassignment they destroy and recreate **all** delegates, even if one element changed or none did. `Repeater` rebuilds all N; `ListView` rebuilds the viewport and additionally **loses its add/remove transitions entirely**.
+
+    ```qml
+    // rebuilds every delegate whenever the expression re-evaluates
+    Repeater { model: list.filter(x => x.visible) }
+
+    // creates and destroys only what actually changed
+    Repeater {
+        model: ScriptModel {
+            values: list.filter(x => x.visible)
+            objectProp: "id"      // key for plain JS objects; omit for QObjects
+        }
+    }
+    ```
+
+    Symptoms are rarely reported as "too many delegates". They show up as:
+
+    - **animations replaying on unrelated items** — a new notification arriving made every card already on screen re-run its entry animation, because `Component.onCompleted` fired again on all of them;
+    - **a visible stall on open** — measured at 114 array reassignments in the first second, ~2300 delegate creations, each doing an icon lookup;
+    - **delegate-local state silently resetting** — a clipboard row's cached thumbnail path was lost on every rebuild, re-forking `cliphist decode` per visible image row per keystroke.
+
+    Two caveats: `ScriptModel` is documented as undefined behaviour on lists containing **duplicates**, and Quickshell's exposed lists are read-only, so `sort()` needs a copy — `[...model.values].sort(...)`.
+
+    Rule of thumb: if a `model:` is an expression rather than a native model object, it wants `ScriptModel`. Native models (`SystemTray.items`, `QsMenuOpener.children`, an `ObjectModel`) already diff incrementally and must be passed through untouched.
+
+77. **`Hyprland.dispatch()` only runs *dispatchers*, and it discards the reply — so it cannot drive ecosystem tools like hyprsunset.** Hyprland's IPC has two distinct surfaces: dispatchers (`hyprctl dispatch …`, what `Hyprland.dispatch()` wraps) and plain hyprctl commands (`hyprctl hyprsunset …`, `hyprctl setprop`, `hyprctl keyword`). Only the first is reachable through `Quickshell.Hyprland`.
+
+    Because gotcha #71 already established that Hyprland 0.56's Lua parser evaluates the payload and that `dispatch()` throws the reply away, a wrong payload here fails **completely silently** — no error, no log line, no visual change. That makes it an easy hour to lose.
+
+    ```qml
+    // silently does nothing: hyprsunset is not a dispatcher
+    Hyprland.dispatch('hl.dsp.hyprsunset({ temperature = 4000 })');
+
+    // works: shell out to hyprctl, like BackendNiri does for `niri msg`
+    Quickshell.execDetached(["hyprctl", "hyprsunset", "temperature", "4000"]);
+    ```
+
+    A related trap when verifying gamma tools: **`grim` cannot see their effect.** `wlr-gamma-control` applies a LUT at the CRTC, after compositing, while a screenshot copies the composited buffer. Sampling a capture's colour balance before and after therefore shows only noise, and reads as "the feature is broken" when it is working. Verify via the tool's own reply (`hyprctl hyprsunset temperature 4000` prints `ok`) and with your eyes.
+
+78. **DPMS does not gate input. A focused text field keeps accepting keystrokes while the screens are off, and key repeat turns one of them into dozens.** Blanking the monitors is an output-side operation; the compositor still routes keys to whoever holds focus. If a lock surface owns focus when the idle cycle blanks, every key pressed at the dark screen lands in the password field.
+
+    Key repeat is what makes it obvious rather than subtle. At a typical `repeat_delay 300` / `repeat_rate 30`, holding one key for a second injects ~30 characters — and behind `echoMode: TextInput.Password` they are invisible, so it reads as "the field is mysteriously pre-filled".
+
+    It is worse when the compositor does not wake on input by itself. Hyprland's `misc:key_press_enables_dpms` and `misc:mouse_move_enables_dpms` both default to **false**, so the wake has to come from the shell noticing activity and dispatching `dpms enable` — and the panels then take their own time to light up. The whole of that window is blind typing.
+
+    Two defences, both cheap:
+
+    ```qml
+    // 1. Refuse input while the screens are dark, and clear on the way back.
+    readOnly: LockService.pamChecking || LockService.inputBlocked
+
+    // 2. Drop auto-repeat outright. A password is typed, never held.
+    Keys.onPressed: event => {
+        if (event.isAutoRepeat) { event.accepted = true; return; }
+        // …
+    }
+    ```
+
+    Derive the "screens are dark" flag rather than assigning it. A pushed flag that misses its clearing edge leaves the field permanently `readOnly`, and `ext-session-lock` keeps the screen locked when its client dies — so that particular bug costs a TTY to recover from. Making it a pure function of the blank state plus a self-terminating timer means there is no stored state to get stuck, and the unblock is driven by the very input the user makes to wake the machine.
+
+79. **A `PopupWindow` on a bar gets no keyboard input unless it takes a grab AND the bar is focusable when the grab arrives.** Clicking a `TextInput` inside it gives the item `activeFocus` and draws the cursor, so it looks focused. But the compositor never sends the surface a key or a paste, and keys keep going to whatever window had focus. The Wi-Fi password field in the Control Center sat like this.
+
+    A plain xdg_popup only gets keyboard focus through a grab, so `grabFocus: true` is the first half. It isn't enough on niri. `grab()` in niri's `src/handlers/xdg_shell.rs` checks whether the popup's root layer surface can receive keyboard focus. With the bar at `keyboardFocus: None` it still grants the grab, but only for the pointer: outside clicks close the popup, and the keys still go to the other window. That's the confusing half-working state.
+
+    The second half is to make the bar focusable, only while the popup is open. Leaving it `OnDemand` all the time lets every click on a workspace chip take the keyboard away from the focused app. Quickshell applies the interactivity change on the bar's next polish and commit, so delay mapping the popup by a few frames or the grab still races the commit:
+
+    ```qml
+    // Bar.qml
+    focusable: controlCenter.wantsKeyboard   // OnDemand while true, else None
+
+    // popup toggle(): flip the flag, map the popup ~60 ms later
+    popup.wantsKeyboard = true;
+    openDelay.restart();                     // onTriggered: wantOpen = true
+    // onVisibleChanged, when !visible: wantsKeyboard = false
+    ```
+
+    Setting the bar back to `None` is safe. niri's `update_keyboard_focus` drops the on-demand layer focus once interactivity is no longer `OnDemand`, and the keyboard returns to the previously focused window.
+
+    `grabFocus` sets `Qt::Popup` on the backing window when Quickshell creates it. Changing the property on an open popup does nothing until it is hidden and shown again. The grab has a side effect the rest of this repo's popups don't expect: an outside click closes the popup. Quickshell hides the QWindow and emits `visibleChanged`, but leaves your QML `visible:` binding in place. With the `wantOpen` / `hideHold` recipe (gotcha #56) that leaves `wantOpen` stuck at `true`. Two things need handling:
+
+    ```qml
+    grabFocus: true
+    property bool _dismissing: false
+    property real _dismissedAt: 0
+
+    // Don't let the fade-out hold map the surface again after a dismissal.
+    onWantOpenChanged: {
+        if (wantOpen)          hideHold.stop();
+        else if (!_dismissing) hideHold.restart();
+    }
+    onVisibleChanged: {
+        if (visible) return;
+        if (wantOpen) {                 // we did not close it: the grab ended
+            _dismissedAt = Date.now();
+            _dismissing = true;
+            wantOpen = false;
+            _dismissing = false;
+        }
+        PopupController.closed(popup);
+    }
+
+    // Clicking the bar button that owns the popup dismisses it on press,
+    // then toggles on release. Without this guard it reopens at once.
+    function toggle() {
+        if (wantOpen) { wantOpen = false; return; }
+        if (Date.now() - _dismissedAt < 300) return;
+        // ... open as usual
+    }
+    ```
+
+    Only popups with text entry need this. The rest of the bar's popups have no keyboard input, and keeping them grab-free means they stay open while you click around other apps. `PanelWindow` popups get keyboard input through `WlrLayershell.keyboardFocus` instead (Launcher, Settings, PolkitDialog).
+
+80. **A window whose `color` is opaque when it is first shown cannot become transparent later.** Quickshell picks the surface format from `color` at creation (documented on `QsWindow.color`), so a bar created with `color: Theme.bg` and later switched to `"transparent"` keeps an opaque surface and the "transparent" part renders solid. Anything that may ever need transparency, such as the auto-hiding bar, sets `color: "transparent"` from the start and paints its background in an inner `Rectangle`. `surfaceFormat.opaque: false` is the other way out, and it too must be set before the window is shown.
+
+    Hot-reload makes this worse. Reloadable windows are reused across a reload, so changing an existing window from opaque to transparent does nothing until the daemon restarts. Test such a change on a fresh `qs`.
+
+81. **Build `mask` regions from explicit geometry, not from an item that moves or may be null.** `mask: Region { item: someItem }` follows the item's geometry, but the `Region` docs warn it "does not update automatically" in some cases, and the auto-hide bar in illogical-impulse found that a region whose item is null can leave the whole surface taking input: an invisible strip that eats clicks at the top of the screen. The auto-hiding `Bar.qml` binds the numbers directly instead:
+
+    ```qml
+    mask: Region {
+        width: bar.width
+        height: bar.revealed ? bar.implicitHeight : 2   // 2 px edge strip when hidden
+    }
+    ```
+
+    Plain bound properties emit the region's change signal reliably. If a region must follow an item, emit `changed()` by hand when the item moves.
+
+82. **A `PanelWindow` whose `exclusiveZone` changes right after it maps can keep reserving the old zone.** In Quickshell 0.3.1 (`src/wayland/wlr_layershell/surface.cpp`, unchanged on master as of 2026-10), the `LayerSurface` constructor sends `set_exclusive_zone(<current value>)` but does not record it in `committed`, which stays at its default of 0. `commit()` only sends values that differ from `committed`. So if the zone goes from N to 0 between surface creation and the first `commit()`, the 0 looks unchanged and is never sent. The compositor keeps N, and windows stop N pixels short of the edge with nothing drawn there.
+
+    The timing is narrow but easy to hit. A throwaway shell whose zone flips from 40 to 0 lost the change every time with `Qt.callLater` or a 0 ms `Timer`, and never with a synchronous flip or a 50 ms timer. The auto-hiding bar hit it after a reboot: `Local` used to read `config.jsonc` asynchronously, so `barAutoHide` was `false` at creation (zone 32) and became `true` a moment later. Restarting the shell by hand never showed it; the first start after a reboot did, presumably because the read was slower.
+
+    Two ways to stay clear of it:
+    - Make the first value final. `Local` now reads the config with `blockLoading: true` from `Component.onCompleted`, so no setting starts on its default.
+    - A change from any nonzero value to another nonzero value always goes through, and so does any change after the first commit. Only a change back to 0 in that first window is lost.
+
+    To clear a stuck zone in a running shell, change it twice: `qs ipc call bar toggle` twice pins and unpins the bar, sending 32 and then 0.
+
+
+
+
+
+
+
+
+
+
+
+### Style & best practices
+
+- **Singletons for shared state** (clock, audio, theme, system info). Namespace them clearly.
+- **Split files when a single file exceeds ~150 lines.** UpperCase filenames become types; lowercase filenames are JS modules.
+- **Cache process output, don't re-spawn per refresh.** Reuse a single `Process { running: true }` driven by a `Timer`.
+- **Prefer the included service singletons** (`Mpris`, `SystemTray`, `Notifications`, `Pipewire`, `UPower`) over manually shelling out.
+- **For unsupported compositors**, build IPC via `Socket` or `Process` + `SplitParser`.
+
+### Required QML imports cheat-sheet
+
+```qml
+import QtQuick                               // base visuals
+import QtQuick.Layouts                       // RowLayout/ColumnLayout
+import QtQuick.Controls                      // Button, Slider, TextField
+import QtQuick.Effects                       // MultiEffect, RectangularShadow
+import Qt5Compat.GraphicalEffects            // (if qt5compat installed) older effects
+import Quickshell                            // PanelWindow, Variants, ShellRoot, ...
+import Quickshell.Io                         // Process, FileView, IpcHandler, ...
+import Quickshell.Wayland                    // WlSessionLock, ToplevelManager, WlrLayershell
+import Quickshell.Hyprland                   // Hyprland.*
+import Quickshell.I3                         // I3.*
+import Quickshell.Services.SystemTray
+import Quickshell.Services.Mpris
+import Quickshell.Services.Notifications
+import Quickshell.Services.Pipewire
+import Quickshell.Services.UPower
+import Quickshell.Services.Pam
+import Quickshell.Services.Greetd
+import Quickshell.Bluetooth
+import Quickshell.DBusMenu
+import Quickshell.Widgets                    // IconImage, WrapperRectangle, ...
+```
+
+### Useful environment variables
+
+| Var | Purpose |
+|---|---|
+| `QS_NO_RELOAD_POPUP=1` | suppress the after-reload notification popup |
+| `QS_ICON_THEME=<name>` | force icon theme (or use `//@ pragma IconTheme`) |
+
+### Distribution targets
+
+If shipping a config:
+
+- Pin a Quickshell version (Nix: revision in flake input; Arch: package alongside).
+- Put the config in `$XDG_CONFIG_HOME/quickshell/<your-name>/`. Run with `qs -c <your-name>`.
+- For system-wide distribution: `/etc/xdg/quickshell/<name>/`.
+
+---
+
+*Generated from <https://quickshell.org/docs/v0.2.1/>. Quickshell is pre-1.0 — APIs may break between versions; consult the upstream changelog.*

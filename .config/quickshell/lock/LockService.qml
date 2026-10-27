@@ -1,0 +1,201 @@
+pragma Singleton
+
+// LockService.qml
+// Session-lock state + PAM. Drives the WlSessionLock instance defined in
+// lock/Lock.qml.
+//
+// Two callers:
+//   - qs.system's IdleService, on its idle-lock stage. Calls lock() directly.
+//   - the qs-IPC handler in shell.qml, for a compositor keybind like
+//     Mod+Shift+X and for the lock-on-suspend systemd unit.
+//
+// Lifecycle:
+//   1. lock()              → locked=true; pam.active=true; surface UIs appear
+//   2. respond(text)       → pam.respond if responseRequired (called from
+//                            password TextInput on Enter)
+//   3. PAM completes:
+//        Success → locked=false (unlock); pamError cleared
+//        Failed  → pamError="Authentication failed"; pam restarted for retry
+//
+// Multi-monitor: one PamContext shared across all WlSessionLockSurface
+// instances; password fields all point at LockService.respond().
+//
+// Wallpaper: the lock surfaces read their blurred background directly from
+// WallpaperService now (per-monitor, via WallpaperService.pathFor(screen.name)).
+// This module previously parsed ~/.config/waypaper/config.ini for that path,
+// but waypaper has been replaced by the in-shell wallpaper module.
+
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import Quickshell.Services.Pam
+import qs
+
+Singleton {
+    id: root
+
+    // ---- Public state ----
+
+    // Drives WlSessionLock.locked. Stays true until PAM completes Success.
+    property bool locked: false
+
+    // Latest message from PAM (e.g. "Password:"). Surface UIs may show it.
+    property string pamMessage: ""
+
+    // Set to a human-readable string after a failed auth attempt; bound to
+    // password-field error styling. Persists across the auto-restarted PAM
+    // session so the user actually sees it; cleared only on the next user
+    // attempt (in respond()) or on success.
+    property string pamError: ""
+
+    // True while PAM is mid-conversation (used to gate respond() calls).
+    property bool pamActive: false
+
+    // Mirrors WlSessionLock.secure — true once the compositor confirms every
+    // output is covered by a lock surface. Written imperatively from
+    // lock/Lock.qml, which owns the WlSessionLock instance; nothing binds it,
+    // so the assignment is safe (gotcha #68).
+    //
+    // SleepService gates on this: it holds a logind delay inhibitor open
+    // until the lock is genuinely on screen, so the machine can't suspend
+    // with the desktop still visible.
+    property bool secure: false
+
+    // True between respond() and the PAM completion signal — i.e. while
+    // pam_unix is performing its ~2 s validation. Drives the disabled +
+    // dimmed state of the password field, so the user can see their input
+    // was received and that they should wait.
+    property bool pamChecking: false
+
+    // Whether the monitors are currently off because the idle cycle blanked
+    // them. Bound from shell.qml rather than read directly: qs.system
+    // already imports qs.lock (IdleService calls lock()), so importing
+    // qs.system from here would close a module cycle.
+    property bool screensBlanked: false
+
+    // Input that arrives while the screens are dark is blind — the user
+    // cannot see the field, so it is a wake gesture, not a password. With
+    // key repeat at 30/s a single held key injects roughly 30 characters,
+    // which is how the password field ended up pre-filled after every idle
+    // blank.
+    //
+    // Derived, never assigned. A pushed flag that missed its clearing edge
+    // would leave the field permanently unable to accept a password, and
+    // ext-session-lock keeps the screen locked when its client dies, so
+    // recovery from that is a TTY. As a pure function of screensBlanked and
+    // a self-terminating timer there is no stored state to get stuck: if
+    // the screens are on and the timer has run, this is false.
+    readonly property bool inputBlocked:
+        root.screensBlanked || settleTimer.running
+
+    // dpms enable returns well before the panels actually show anything, so
+    // keep swallowing input briefly after the wake.
+    Timer {
+        id: settleTimer
+        interval: 400
+        repeat: false
+    }
+
+    onScreensBlankedChanged: if (!root.screensBlanked) settleTimer.restart()
+
+    // Defensive: if respond() runs before PAM has called responseRequired
+    // (e.g. very-early submit at lock-open before the prompt arrived),
+    // park the text here and submit it on the next responseRequired edge.
+    property string _pendingResponse: ""
+
+    // ---- Public methods ----
+
+    function lock() {
+        if (root.locked) return;        // idempotent — IdleService and IPC may both call
+        root.pamError = "";
+        root.pamMessage = "";
+        root.locked = true;
+        // Start PAM. Conversation will fire pamMessage / responseRequired.
+        if (!pam.active) pam.active = true;
+    }
+
+    function respond(text) {
+        if (!pam.active) {
+            // Edge case (very fast user at lock-open): surface tried to
+            // submit before PAM had its first prompt out. Queue and kick.
+            root._pendingResponse = text;
+            pam.active = true;
+            return;
+        }
+        if (pam.responseRequired) {
+            // PAM is ready for input — submit. Clear any lingering error
+            // so the status text returns to the prompt while we validate;
+            // flip pamChecking on so the surface disables/dims the input.
+            root.pamError = "";
+            root.pamChecking = true;
+            pam.respond(text);
+        } else {
+            // Shouldn't happen in practice — surface disables input while
+            // pamChecking, so respond() can't be called mid-validation.
+            // Queue defensively in case some other path triggers it.
+            root._pendingResponse = text;
+        }
+    }
+
+    // ---- PAM ----
+
+    PamContext {
+        id: pam
+        config: "qslock"                 // /etc/pam.d/qslock — single line `auth include login`
+        // user: ""  (empty = current user, which is what we want)
+
+        onActiveChanged:    root.pamActive = pam.active
+        onMessageChanged: {
+            // Track the latest prompt for surfaces that want to show it; do
+            // NOT touch pamError here — the auto-restart after a failed
+            // attempt fires a fresh "Password:" message microseconds later,
+            // which previously erased the error text instantly.
+            root.pamMessage = pam.message || "";
+        }
+        // Whenever PAM signals it's ready for input, drain any queued
+        // response (lock-open race only — see respond() comment).
+        onResponseRequiredChanged: {
+            if (pam.responseRequired && root._pendingResponse.length > 0) {
+                const t = root._pendingResponse;
+                root._pendingResponse = "";
+                root.pamError = "";
+                root.pamChecking = true;
+                pam.respond(t);
+            }
+        }
+        onCompleted: result => {
+            // PAM finished — re-enable the input regardless of outcome.
+            root.pamChecking = false;
+            if (result === PamResult.Success) {
+                // Authenticated. Drop the lock; clear transient state.
+                root.locked = false;
+                root.pamError = "";
+                root.pamMessage = "";
+                root.pamActive = false;
+            } else if (result === PamResult.Failed) {
+                root.pamError = "Authentication failed";
+                root.pamActive = false;
+                // Restart PAM so the user can immediately retry. The error
+                // text persists until the next respond() (i.e. until the
+                // user actually attempts a new password).
+                Qt.callLater(() => {
+                    if (root.locked) pam.active = true;
+                });
+            } else {
+                // PamResult.Error — config or system fault. Surface this as
+                // an error and let the user retry; logging for diagnosis.
+                console.warn("[LockService] PAM error result:", result);
+                root.pamError = "PAM error — try again";
+                root.pamActive = false;
+                Qt.callLater(() => {
+                    if (root.locked) pam.active = true;
+                });
+            }
+        }
+        onError: err => {
+            console.warn("[LockService] PAM error:", err);
+            root.pamChecking = false;
+            root.pamError = "PAM error — try again";
+        }
+    }
+}

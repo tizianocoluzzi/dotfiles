@@ -1,0 +1,185 @@
+// quickshell-bar — local override config.
+//
+// Copy this file to ~/.config/quickshell-bar/config.jsonc to start
+// customizing the shell on your machine. Every key below is set to
+// its current default — copying the file unmodified produces NO
+// visible change. Edit the values you want to override; delete or
+// comment out the rest.
+//
+//   mkdir -p ~/.config/quickshell-bar
+//   cp examples/config.jsonc ~/.config/quickshell-bar/config.jsonc
+//   # then edit ~/.config/quickshell-bar/config.jsonc
+//
+// Hot-reload: save the file and most values update live in the running
+// shell. Theme bindings are reactive; long-running Timers re-arm only
+// on next fire. Font family changes occasionally need a full restart
+// to repaint everything.
+//
+// JSONC syntax: lines starting with `//` (after optional whitespace)
+// are stripped before JSON.parse. Inline `//` inside string values
+// (URLs etc.) is untouched. Trailing commas and unquoted keys are
+// NOT allowed — strict JSON otherwise.
+//
+// Reference: docs/CUSTOMIZATION.md
+{
+  // ─── Colours: surfaces ─────────────────────────────────────────
+  "bg":           "#16181c",   // bar / popup base background
+  "surface":      "#1e1e22",   // hover state, mild elevation (rows, tile body)
+  "surfaceHi":    "#26262a",   // pinned / pressed / active state
+  "border":       "#2a2a2e",   // lines, popup borders, dividers
+
+  // ─── Colours: text ─────────────────────────────────────────────
+  "text":         "#fcfcfc",   // primary text
+  "textDim":      "#909090",   // secondary text (status lines, % readouts)
+  "textMuted":    "#5e5e5e",   // tertiary text (separators, weekend dates)
+
+  // ─── Colours: accent ───────────────────────────────────────────
+  "accent":       "#ffffff",   // focused-day, slider thumb, active-tile fill
+  "accentText":   "#16181c",   // text drawn on top of accent fill
+
+  // ─── Colours: error / warning ──────────────────────────────────
+  "error":        "#ff5050",   // error borders / strokes
+  "errorBright":  "#ff7070",   // error text on dark backgrounds
+
+  // ─── Colours: workspace pips ───────────────────────────────────
+  "pipIdle":      "#2a2a2e",   // idle workspace pip
+  "pipActive":    "#3a3a3e",   // active on output but not focused
+  "pipFocused":   "#ffffff",   // focused workspace pip (typically = accent)
+
+  // ─── Geometry ──────────────────────────────────────────────────
+  "barHeight":    32,          // px. Reasonable range: 24..48
+  "radius":       6,           // px. Popup / card / tile corner radius
+  "radiusSmall":  4,           // px. Chip / pill / hover-bg corner radius
+
+  // ─── Animation durations ───────────────────────────────────────
+  "animFast":     100,         // ms. Hover transitions (color flips)
+  "animMed":      140,         // ms. Switches, slider thumbs, pills
+
+  // ─── Fonts ─────────────────────────────────────────────────────
+  // Mono font used everywhere — bar, popups, lock clock.
+  "fontMono":     "Iosevka Nerd Font",
+  // Icon font (Solid style) for most glyphs.
+  "fontIcon":     "Font Awesome 7 Free",
+  // Brands font (currently only the Bluetooth glyph uses it).
+  "fontBrand":    "Font Awesome 7 Brands",
+
+  // ─── Font sizes (5-step scale) ─────────────────────────────────
+  "fontSizeBadge":  9,         // notification count, signal-strength overlays
+  "fontSizeSmall":  11,        // tooltips, dim secondary text, status lines
+  "fontSizeNormal": 13,        // bar body text, time, workspace numbers
+  "fontSizeLarge":  15,        // section headers, Now Playing title
+  "fontSizeXL":     17,        // standout labels (lock password input)
+
+  // Default Font Awesome glyph size in 22 × 22 bar widgets.
+  "iconSize":     13,
+
+  // ─── Behaviour ─────────────────────────────────────────────────
+  // KDE-style audible cue on volume change / unmute. Set false for a
+  // silent shell. Requires libcanberra + sound-theme-freedesktop.
+  "volumeFeedbackEnabled": true,
+
+  // Focused-window title, shown between the workspaces and the clock.
+  // It elides to whatever room is left before the clock, so on a narrow
+  // monitor it simply gets shorter. maxWidth caps it below that for
+  // people who don't want a long title dominating the bar; hover shows
+  // the full title when it's cut off.
+  "activeWindowEnabled": true,
+  "activeWindowMaxWidth": 400,
+
+  // ─── Bar auto-hide ─────────────────────────────────────────────
+  // Hide the bar until the pointer rests on the top edge for
+  // barRevealDelay ms; it slides out again barHideDelay ms after the
+  // pointer leaves. Windows reach the top edge and the revealed bar draws
+  // over them. Meant for OLED panels, where a static bar risks burn-in.
+  //
+  // `qs ipc call bar toggle` pins it visible until called again.
+  "barAutoHide": false,
+  "barRevealDelay": 150,
+  "barHideDelay": 400,
+  // Show the bar for 1.5 s when a monitor switches workspace.
+  "barPeekOnWorkspaceSwitch": true,
+
+  // ─── Microphone ────────────────────────────────────────────────
+  // When the mic indicator appears in the bar:
+  //   "auto"   - only while muted or while something is capturing,
+  //              which doubles as a privacy indicator (default)
+  //   "always" - like the other bar widgets
+  //   "never"  - hidden; the mic OSD still works
+  //
+  // The OSD reacts to whoever changed the mic, so an existing
+  // `wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle` keybind gets feedback
+  // without being rebound to `qs ipc call mic toggle`.
+  "microphoneIndicator": "auto",
+
+  // ─── Night light ───────────────────────────────────────────────
+  // Blue-light filter, driven by hyprsunset. The Control Center's
+  // "Night light" tile writes nightLightEnabled; unlike Caffeine and
+  // DND it persists, so the filter survives a shell restart.
+  //
+  // The hyprsunset daemon only runs while the filter is on, so leaving
+  // this off costs nothing at login or on a shell reload.
+  //
+  // Needs the `hyprsunset` package and a compositor backend that
+  // implements a night-light dispatch (currently Hyprland only). Where
+  // either is missing the tile hides itself and these keys do nothing.
+  //
+  // Lower temperature = warmer. 6000K is roughly neutral; 4000K is a
+  // mild evening filter; 2500K is heavily orange.
+  "nightLightEnabled": false,
+  "nightLightTemperature": 4000,
+
+  // ─── Idle ──────────────────────────────────────────────────────
+  // Seconds of inactivity before each stage. Set either to 0 to turn
+  // that stage off; set both to 0 to disable idle handling entirely.
+  //
+  // Handled in-shell — this replaces hypridle / swayidle. Apps holding
+  // idle-inhibit-v1 (mpv, browsers playing video, Steam) suppress both
+  // stages automatically, so you won't get locked out mid-film.
+  //
+  // Toggle at runtime with the Control Center's Caffeine tile, or
+  // `qs ipc call idle disable`. `qs ipc call idle status` reports what
+  // is currently armed.
+  //
+  // Screen blanking needs compositor support: Hyprland, niri and Sway
+  // are wired up; on anything else the DPMS stage is a silent no-op and
+  // only the lock stage runs.
+  "idleLockSeconds": 300,
+  "idleDpmsSeconds": 360,
+
+  // ─── Launcher: web-search engine (?-prefix mode) ───────────────
+  // %s is replaced with the URL-encoded query.
+  // Common alternatives:
+  //   "https://duckduckgo.com/?q=%s"          "DuckDuckGo"
+  //   "https://www.google.com/search?q=%s"    "Google"
+  //   "https://search.brave.com/search?q=%s"  "Brave Search"
+  //   "https://www.startpage.com/do/search?q=%s"  "Startpage"
+  "searchUrl":    "https://kagi.com/search?q=%s",
+  "searchName":   "Kagi",
+
+  // ─── System theme sync ─────────────────────────────────────────
+  // When true, applying a theme (via the Theme tab or the CC light/dark
+  // toggle tile) also runs `gsettings set` to update the XDG portal's
+  // color-scheme + the gtk-theme. Apps outside the shell that respect
+  // these settings (GTK4/libadwaita, Qt6 via portal, Electron 14+,
+  // Firefox 119+, Chromium-based browsers, GTK3 apps) follow along.
+  // Set false to disable system-theme orchestration entirely; the shell
+  // theme works the same, but external apps stay where they are.
+  "systemThemeSync": true,
+
+  // gtk-theme set when applying a dark palette. Must be installed
+  // (typically in /usr/share/themes or ~/.themes) for GTK3 apps to pick
+  // it up. GTK4/libadwaita apps mostly ignore this and use color-scheme.
+  "gtkThemeDark":   "Adwaita-dark",
+
+  // gtk-theme set when applying a light palette.
+  "gtkThemeLight":  "Adwaita",
+
+  // KDE/Qt color-scheme name applied via plasma-apply-colorscheme. Used
+  // by KDE apps (Dolphin, Kate, Konsole, etc.) and Qt apps with
+  // QT_QPA_PLATFORMTHEME=kde. Skipped silently if plasma-apply-colorscheme
+  // isn't on PATH. Available schemes live under /usr/share/color-schemes/
+  // (system) or ~/.local/share/color-schemes/ (user) — `.colors` extension
+  // omitted from the value here.
+  "kdeColorSchemeDark":  "BreezeDark",
+  "kdeColorSchemeLight": "BreezeLight"
+}

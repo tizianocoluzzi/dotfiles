@@ -1,0 +1,179 @@
+pragma Singleton
+
+// Compositor.qml
+// Cross-compositor abstraction. Detects the running Wayland compositor
+// at startup, instantiates the matching Backend adapter, and re-exports
+// a uniform surface that the rest of the shell consumes.
+//
+// Public surface (read by Workspaces, shell.qml, PowerMenuPopup, etc.):
+//
+//   workspaces         - array of workspace records
+//                        each has: id, idx, output, is_focused, is_active, name
+//                        optional: label - the text a chip should render, when
+//                        it differs from idx. Consumers fall back to idx when
+//                        absent, so backends only set it if they must. Hyprland
+//                        does, because its idx is a global id while chips count
+//                        1..N per monitor.
+//   focusedOutput      - string, name of currently-focused monitor
+//   currentLayout      - string, current keyboard layout name
+//                        empty on backends that can't surface it
+//   windowFocused(id)  - signal, emitted when the user focuses an app
+//                        consumers use it to dismiss popups
+//   dispatchFocusWorkspace(idx)  - click-to-focus a chip
+//   dispatchLogout()             - power menu's Logout action
+//   dispatchDpms(on)             - power monitors on/off, driven by
+//                                  IdleService's DPMS stage. No-op on the
+//                                  stub backend, so idle-blank simply does
+//                                  nothing on unsupported compositors
+//                                  rather than erroring.
+//   overviewOpen                 - bool, the compositor's workspace overview
+//                                  is showing. Optional: false on backends
+//                                  without an overview (only niri has one).
+//                                  Keeps an auto-hidden bar revealed.
+//   supportsOutputProbe          - bool, backend implements the call below
+//   probeOutputsFailing(sinceSec, callback)
+//                                - optional. Calls callback(true) if the
+//                                  compositor has failed to present a frame
+//                                  since sinceSec (Unix seconds). Used by
+//                                  SleepService to spot outputs stuck after
+//                                  resume. Only BackendNiri implements it.
+//
+// Detection priority, first match wins:
+//   1. QS_COMPOSITOR override          niri / hyprland / sway / i3 / stub
+//   2. HYPRLAND_INSTANCE_SIGNATURE  -> hyprland
+//   3. SWAYSOCK                     -> sway
+//   4. NIRI_SOCKET                  -> niri
+//   5. XDG_CURRENT_DESKTOP fuzzy match
+//   6. fallback                     -> stub
+//
+// IMPORTANT: pragma Singleton must be line 1 (gotcha #45). Header comments
+// must NOT contain curly braces — the qmlscanner doesn't strip them and
+// the brace tracker gets confused, silently registering this file as a
+// regular type instead of a singleton.
+
+import QtQuick
+import Quickshell
+
+Singleton {
+    id: root
+
+    // ---- Detection ----
+
+    readonly property string detectedKind: {
+        const env = (k) => Quickshell.env(k) || "";
+        const override = env("QS_COMPOSITOR").toLowerCase();
+        const valid = ["niri", "hyprland", "sway", "i3", "stub"];
+        if (valid.indexOf(override) >= 0) return override;
+
+        if (env("HYPRLAND_INSTANCE_SIGNATURE")) return "hyprland";
+        if (env("SWAYSOCK"))                   return "sway";
+        if (env("NIRI_SOCKET"))                return "niri";
+
+        const xdg = env("XDG_CURRENT_DESKTOP").toLowerCase();
+        if (xdg.indexOf("hyprland") >= 0) return "hyprland";
+        if (xdg.indexOf("sway") >= 0)     return "sway";
+        if (xdg.indexOf("niri") >= 0)     return "niri";
+        if (xdg.indexOf("i3") >= 0)       return "i3";
+
+        return "stub";
+    }
+
+    Component.onCompleted: {
+        console.log("[Compositor] detected backend:", detectedKind);
+    }
+
+    // ---- Backend instantiation ----
+    //
+    // Loader picks exactly one backend at startup. We use Component objects
+    // (rather than direct properties) so unused backend QML files don't get
+    // initialized — this saves startup work and avoids spurious imports
+    // failing on systems missing the relevant Quickshell.* sub-module.
+
+    Loader {
+        id: backendLoader
+        active: true
+        sourceComponent: {
+            switch (root.detectedKind) {
+                case "niri":     return niriComp;
+                case "hyprland": return hyprComp;
+                case "sway":
+                case "i3":       return swayComp;
+                default:         return stubComp;
+            }
+        }
+    }
+
+    Component { id: niriComp;  BackendNiri     { } }
+    Component { id: hyprComp;  BackendHyprland { } }
+    Component { id: swayComp;  BackendSway     { } }
+    Component { id: stubComp;  BackendStub     { } }
+
+    readonly property var backend: backendLoader.item
+
+    // ---- Public surface ----
+
+    readonly property var workspaces:    backend ? backend.workspaces    : []
+    readonly property string focusedOutput: backend ? backend.focusedOutput : ""
+    readonly property string currentLayout: backend ? backend.currentLayout : ""
+    // Optional, so probed like dispatchNightLight: backends that never
+    // define the property read as false.
+    readonly property bool overviewOpen:
+        backend && backend.overviewOpen !== undefined ? backend.overviewOpen : false
+
+    signal windowFocused(var id)
+
+    Connections {
+        target: root.backend
+        enabled: root.backend !== null
+        function onWindowFocused(id) { root.windowFocused(id); }
+    }
+
+    function dispatchFocusWorkspace(idx) {
+        if (backend) backend.dispatchFocusWorkspace(idx);
+    }
+
+    function dispatchLogout() {
+        if (backend) backend.dispatchLogout();
+    }
+
+    // on === true  -> wake all monitors
+    // on === false -> blank all monitors
+    //
+    // All four shipped backends implement this (the stub as a no-op). The
+    // existence probe is for out-of-tree backends and for hot-reload windows
+    // where the Loader has swapped but the new item hasn't settled — calling
+    // through to an undefined function would throw into IdleService's timer
+    // handler, where nothing is positioned to catch it.
+    function dispatchDpms(on) {
+        if (backend && backend.dispatchDpms) backend.dispatchDpms(on);
+    }
+
+    // kelvin > 0   -> warm the display to that colour temperature
+    // kelvin === 0 -> identity (filter off)
+    //
+    // Unlike dispatchDpms, this is genuinely optional: it needs a gamma
+    // tool from the compositor's own ecosystem, and only Hyprland ships
+    // one we can drive (hyprsunset). The other backends deliberately do
+    // not define it, so `supportsNightLight` is false there and the
+    // Control Center tile hides itself rather than offering a dead
+    // switch. Adding wlsunset/gammastep support later means implementing
+    // the function in that backend and nothing else.
+    readonly property bool supportsNightLight:
+        backend ? backend.dispatchNightLight !== undefined : false
+
+    function dispatchNightLight(kelvin) {
+        if (backend && backend.dispatchNightLight) backend.dispatchNightLight(kelvin);
+    }
+
+    // Optional in the same way as night light. niri gets it by searching its
+    // own log (see BackendNiri). The other backends leave it undefined, and
+    // SleepService skips its post-resume output check there.
+    readonly property bool supportsOutputProbe:
+        backend ? backend.probeOutputsFailing !== undefined : false
+
+    // Unsupported answers false: never blank the screens on no evidence.
+    function probeOutputsFailing(sinceSec, callback) {
+        if (backend && backend.probeOutputsFailing) backend.probeOutputsFailing(sinceSec, callback);
+        else callback(false);
+    }
+}

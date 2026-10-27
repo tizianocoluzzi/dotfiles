@@ -1,0 +1,59 @@
+// ControlCenter.qml
+// Bar trigger for the unified Control Center. Click toggles the popup;
+// the popup itself is anchored to this widget (so its position tracks
+// where this widget sits in the right cluster).
+//
+// Glyph: \uf1de sliders (Font Awesome 7 Solid) — three horizontal
+// sliders, the canonical "control center / quick settings" pictogram.
+// The previously-used \uf737 doesn't exist in FA 7 Free Solid at all
+// (verified via fontTools), which is why the bar widget was rendering
+// as an invisible click target.
+
+import QtQuick
+import Quickshell
+import qs
+import qs.controlcenter
+
+MouseArea {
+    id: root
+
+    implicitWidth: 22
+    implicitHeight: 22
+    anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+
+    hoverEnabled: true
+    cursorShape: Qt.PointingHandCursor
+    acceptedButtons: Qt.LeftButton
+
+    // Bar.qml makes its layer surface focusable while this is true, so
+    // the CC popup can take the keyboard. See ControlCenterPopup.
+    readonly property bool wantsKeyboard: popup.wantsKeyboard
+
+    onClicked: popup.toggle()
+
+    // Hover / active background pill.
+    Rectangle {
+        anchors.fill: parent
+        radius: Theme.radiusSmall
+        color: popup.visible
+            ? Theme.surfaceHi
+            : (root.containsMouse ? Theme.surface : "transparent")
+        Behavior on color { ColorAnimation { duration: Theme.animFast } }
+    }
+
+    BarIcon {
+        anchors.centerIn: parent
+        glyph: "\uf1de"
+    }
+
+    ControlCenterPopup {
+        id: popup
+        anchorItem: root
+    }
+
+    BarTooltip {
+        anchorItem: root
+        show: root.containsMouse && !popup.visible
+        text: "Control Center"
+    }
+}
