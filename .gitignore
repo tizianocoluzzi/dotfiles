@@ -8,3 +8,4 @@
 .config/swaync/themes
 .config/waybar/colors.css
 .config/obsidian/*
+.config/kitty/themes/current-theme.conf
