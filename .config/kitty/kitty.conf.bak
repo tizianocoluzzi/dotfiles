@@ -3351,3 +3351,9 @@ map ctrl+shift+tab next_tab
 # map cmd+q quit
 
 #: }}}
+
+
+# BEGIN_KITTY_THEME
+# Matugen
+include current-theme.conf
+# END_KITTY_THEME
