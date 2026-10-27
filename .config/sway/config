@@ -222,10 +222,13 @@ bindsym $mod+r mode "resize"
     bindsym --locked XF86MonBrightnessUp exec brightnessctl set 5%+
     # Special key to take a screenshot with grim
     bindsym Print exec grim -g "$(slurp)"
+    
 
+    # per vedere app id usa swaymsg -t get-tree
     for_window [app_id="org.pulseaudio.pavucontrol"] floating enable
     for_window [app_id="org.gnome.Calculator"] floating enable
     for_window [app_id="org.rncbc.qpwgraph"] floating enable
+    for_window [app_id="org.gnome.Loupe"] floating enable
 
 #
 # Status Bar:

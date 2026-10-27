@@ -22,7 +22,7 @@ output_path = '~/.config/waybar/colors.css'
 #
 [templates.kitty]
 input_path = '~/.config/matugen/templates/kitty-colors.conf'
-output_path = '~/.config/kitty/themes/current-theme.conf'
+output_path = '~/.config/kitty/current-theme.conf'
 post_hook = "pkill -SIGUSR1 kitty"
 
 [templates.swaync]

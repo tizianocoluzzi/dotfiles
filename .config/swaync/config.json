@@ -46,6 +46,7 @@
     "mpris",
     "title",
     "dnd",
+    "calendar",
     "notifications"
   ],
   "widget-config": {
