@@ -7,3 +7,4 @@
 .config/kitty/no-preference-theme.auto.conf
 .config/swaync/themes
 .config/waybar/colors.css
+.config/obsidian/*
