@@ -1,0 +1,24 @@
+#!/bin/bash
+WALL_DIR="$HOME/Documents/wallpaper/"
+
+CWD="$(pwd)"
+declare -a MODES=(
+    light
+    dark
+)
+cd "$WALL_DIR" || exit
+
+IFS=$'\n'
+
+#SELECTED_WALL=$(for a in *.jpg *.png *.jpeg; do echo -en "$a\0icon\x1f$WALL_DIR$a\n"; done | wofi -dmenu -p "")
+SELECTED_WALL=$(for a in *.jpg *.png *.jpeg; do echo -en "img:$PWD/$a\n"; done | wofi --show dmenu -I -w 4 --style /home/tiz/.config/wofi/dmenu-style.css -D image_size=256)
+SELECTED_WALL="${SELECTED_WALL#img:}"
+echo $SELECTED_WALL
+MODE=$(for a in ${MODES[@]}; do echo $a; done | wofi --show dmenu)
+
+if [ -n "$SELECTED_WALL" ]; then
+    /home/tiz/.local/bin/change-wallpaper "$SELECTED_WALL" "$MODE" 
+fi
+
+
+cd "$CWD" || exit 

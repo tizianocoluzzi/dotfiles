@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# == 2 && -f "$1" && ( "$2" == light || "$2" == dark ) ]] || {
+    printf 'Usage: %s IMAGE light|dark\n' "$0" >&2
+    exit 1
+}
+
+SCRIPT_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+python3 "$SCRIPT_DIR/apply.py" "$1" "$2" \
+    --wallpaper-link "$HOME/Documents/wallpaper/wall.png"
+theme=Adwaita
+if [[ "$2" == dark ]]; then theme+=-dark; fi
+gsettings set org.gnome.desktop.interface gtk-theme "$theme"
+gsettings set org.gnome.desktop.interface color-scheme "prefer-$2"

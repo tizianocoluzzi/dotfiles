@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+shopt -s nullglob nocaseglob
+
+WALL_DIR="$HOME/Documents/wallpaper"
+SCRIPT_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+cd -- "$WALL_DIR"
+
+wallpapers=()
+for file in *.jpg *.png *.jpeg; do
+    [[ "$file" == wall.png ]] || wallpapers+=("img:$PWD/$file")
+done
+((${#wallpapers[@]})) || exit 0
+
+SELECTED_WALL=$(printf '%s\n' "${wallpapers[@]}" |
+    wofi --show dmenu -I -w 4 --style "$HOME/.config/wofi/dmenu-style.css" -D image_size=256) || exit 0
+[[ -n "$SELECTED_WALL" ]] || exit 0
+SELECTED_WALL="${SELECTED_WALL#img:}"
+MODE=$(printf '%s\n' light dark | wofi --show dmenu) || exit 0
+[[ "$MODE" == light || "$MODE" == dark ]] || exit 0
+
+exec bash "$SCRIPT_DIR/change-wallpaper" "$SELECTED_WALL" "$MODE"

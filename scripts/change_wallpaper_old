@@ -1,0 +1,11 @@
+#!/bin/bash
+echo $2
+if [ $1 == '' ]; then
+    echo "empty path"
+    exit
+else
+    ln -sf $1 /home/tiz/Documents/wallpaper/wall.png
+    $HOME/.cargo/bin/matugen image $1 --mode $2 --source-color-index 1
+    #rm /home/tiz/Documents/wallpaper/wall.png
+    # sway output '*' bg $1 fill
+fi

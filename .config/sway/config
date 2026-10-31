@@ -81,7 +81,8 @@ output * bg /home/tiz/Documents/wallpaper/wall.png fill
     # Start your launcher
     bindsym $mod+d exec $menu
 
-    bindsym $mod+t exec $HOME/select-wallpaper.sh
+    bindsym $mod+t exec $HOME/dotfiles/scripts/select-wallpaper
+
 
     # Drag floating windows by holding down $mod and left mouse button.
     # Resize them with right mouse button + $mod.
