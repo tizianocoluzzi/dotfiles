@@ -5,6 +5,7 @@
 .config/kitty/current-theme.auto.conf
 .config/kitty/light-theme.auto.conf
 .config/kitty/no-preference-theme.auto.conf
+.config/kitty/current-theme.conf
 .config/swaync/themes
 .config/waybar/colors.css
 .config/obsidian/*
